@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimGo trace</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1f23; --muted: #6b7079; --line: #e3e4e8;
+  --lane: #c9ccd3; --accent: #2f6fde; --accent-soft: rgba(47,111,222,.12);
+  --ok: #1f9d55; --warn: #c27c0e; --warn-soft: rgba(194,124,14,.18);
+  --bad: #d23f3f; --bad-soft: rgba(210,63,63,.10); --emit: #8a4fd8; --cursor: rgba(47,111,222,.10);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111317; --panel: #191c21; --fg: #e6e7ea; --muted: #949aa5; --line: #2a2e35;
+    --lane: #3a3f48; --accent: #6b9cff; --accent-soft: rgba(107,156,255,.16);
+    --ok: #4cc38a; --warn: #e5a442; --warn-soft: rgba(229,164,66,.20);
+    --bad: #ff6b6b; --bad-soft: rgba(255,107,107,.12); --emit: #b58cff; --cursor: rgba(107,156,255,.14);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111317; --panel: #191c21; --fg: #e6e7ea; --muted: #949aa5; --line: #2a2e35;
+  --lane: #3a3f48; --accent: #6b9cff; --accent-soft: rgba(107,156,255,.16);
+  --ok: #4cc38a; --warn: #e5a442; --warn-soft: rgba(229,164,66,.20);
+  --bad: #ff6b6b; --bad-soft: rgba(255,107,107,.12); --emit: #b58cff; --cursor: rgba(107,156,255,.14);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; }
+header { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand { font-weight: 700; letter-spacing: .2px; }
+.brand span { color: var(--accent); }
+.title { font-family: var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.pill.fail { background: var(--bad-soft); color: var(--bad); }
+.pill.pass { background: rgba(31,157,85,.12); color: var(--ok); }
+.stats { color: var(--muted); font-size: 13px; margin-left: auto; }
+button.theme { margin-left: 4px; }
+.violation { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bad-soft); border: 1px solid var(--bad); }
+.violation b { color: var(--bad); }
+.violation pre { margin: 6px 0 0; white-space: pre-wrap; font: 12.5px/1.4 var(--mono); max-height: 7.5em; overflow: auto; }
+.replay { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+.replay code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 6px 10px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); font: 12.5px var(--mono); }
+button { font: inherit; font-size: 13px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+main { flex: 1; min-height: 0; display: flex; }
+.diagram { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.lanes-head { position: relative; height: 34px; border-bottom: 1px solid var(--line); background: var(--panel); overflow: hidden; flex: none; }
+.lanes-head div { position: absolute; top: 7px; transform: translateX(-50%); font: 600 12.5px var(--mono); white-space: nowrap; padding: 1px 8px; border-radius: 6px; }
+.lanes-head div.down { color: var(--bad); text-decoration: line-through; }
+.lanes-head div.paused { color: var(--warn); }
+.lanes-head div.active { background: var(--accent-soft); }
+.scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }
+svg { display: block; }
+.gutter { font: 10.5px var(--mono); fill: var(--muted); }
+.lane { stroke: var(--lane); stroke-width: 1.5; }
+.down-seg { stroke: var(--bad); stroke-width: 2; stroke-dasharray: 3 4; opacity: .7; }
+.pause-seg { stroke: var(--warn); stroke-width: 9; opacity: .35; stroke-linecap: round; }
+.part-band { fill: var(--warn-soft); opacity: .45; }
+.part-label { font: 11px var(--mono); fill: var(--warn); }
+.arrow { stroke: var(--accent); stroke-width: 1.3; fill: none; }
+.arrow.drop { stroke: var(--bad); stroke-dasharray: 4 3; }
+.dot { fill: var(--accent); }
+.dot.deliver { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5; }
+.timer { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+.boot { fill: none; stroke: var(--ok); stroke-width: 2; }
+.crash { stroke: var(--bad); stroke-width: 2.5; }
+.xmark { stroke: var(--bad); stroke-width: 1.8; }
+.skew { fill: var(--warn); font: 600 12px var(--mono); }
+.emit { fill: var(--emit); }
+.emit-label { font: 600 11px var(--mono); fill: var(--emit); }
+.log-label { font: 11px var(--mono); fill: var(--muted); }
+.viol-band { fill: var(--panel); stroke: var(--bad); }
+.viol-label { font: 700 12px var(--sans); fill: var(--bad); }
+.hit { fill: transparent; cursor: pointer; }
+.hit:hover { fill: var(--cursor); }
+.cursor-row { fill: var(--cursor); }
+.cursor-line { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 2 3; }
+.future { opacity: .12; }
+.inflight { opacity: .55; stroke-dasharray: 2 4; }
+aside { width: 380px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 14px 16px 24px; }
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+aside h2:first-child { margin-top: 0; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: var(--panel); }
+.card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.kind { display: inline-block; font: 700 11px var(--mono); text-transform: uppercase; padding: 1px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.kind.bad { background: var(--bad-soft); color: var(--bad); }
+.kind.warn { background: var(--warn-soft); color: var(--warn); }
+.kind.emit { background: rgba(138,79,216,.14); color: var(--emit); }
+.kind.muted { background: var(--line); color: var(--muted); }
+.meta { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+.node-head { display: flex; align-items: center; gap: 8px; font: 600 13px var(--mono); }
+.status { font: 600 11px var(--sans); padding: 1px 7px; border-radius: 999px; }
+.status.up { color: var(--ok); background: rgba(31,157,85,.12); }
+.status.down { color: var(--bad); background: var(--bad-soft); }
+.status.paused { color: var(--warn); background: var(--warn-soft); }
+.skewed { color: var(--warn); font: 11px var(--mono); }
+pre.json { margin: 8px 0 0; font: 12px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.empty { color: var(--muted); font-style: italic; font-size: 12.5px; margin-top: 6px; }
+footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+footer input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+.pos { font: 12.5px var(--mono); color: var(--muted); min-width: 170px; text-align: right; }
+label.filter { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.keys { width: 100%; font-size: 11.5px; color: var(--muted); }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+@media (max-width: 860px) {
+  html, body { height: auto; }
+  main { flex-direction: column; flex: none; }
+  .diagram { flex: none; height: 62vh; }
+  aside { width: auto; border-left: 0; border-top: 1px solid var(--line); max-height: none; }
+  .stats { margin-left: 0; width: 100%; }
+  .pos { min-width: 0; text-align: left; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div class="brand">Sim<span>Go</span></div>
+    <div class="title" id="title"></div>
+    <div class="pill" id="status"></div>
+    <div class="stats" id="stats"></div>
+    <button class="theme" id="theme" title="Toggle light/dark theme">Theme</button>
+  </div>
+  <div class="violation" id="violation" hidden></div>
+  <div class="replay" id="replay" hidden><code id="replay-cmd"></code><button id="copy">Copy</button></div>
+</header>
+<main>
+  <section class="diagram" aria-label="Space-time diagram">
+    <div class="lanes-head" id="lanes-head"></div>
+    <div class="scroll" id="scroll"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  </section>
+  <aside id="inspector" aria-live="polite"></aside>
+</main>
+<footer>
+  <button id="first" title="First step (Home)">⏮</button>
+  <button id="prev" title="Previous step (←)">◀</button>
+  <button id="play" title="Play / pause (Space)">▶ Play</button>
+  <button id="next" title="Next step (→)">▶</button>
+  <button id="last" title="Last step (End)">⏭</button>
+  <button id="jump-viol" title="Jump to violation (V)" hidden>Jump to violation</button>
+  <input type="range" id="slider" min="0" value="0" aria-label="Step">
+  <span class="pos" id="pos"></span>
+  <label class="filter"><input type="checkbox" id="show-timers" checked> timers</label>
+  <label class="filter"><input type="checkbox" id="show-logs"> logs</label>
+  <div class="keys"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>Shift</kbd> ×10 · <kbd>Space</kbd> play · <kbd>V</kbd> violation · click any event to jump to it</div>
+</footer>
+<script id="simgo-data" type="application/json">__SIMGO_DATA__</script>
+<script>
+(() => {
+  "use strict";
+  const DATA = JSON.parse(document.getElementById("simgo-data").textContent);
+  const T = DATA.trace;
+  const EV = T.events || [];
+  const NODES = T.nodes || [];
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const ROW = 22, GUTTER = 78, TOP = 12;
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- helpers ----------
+  const fmtTime = (ns) => {
+    const ms = ns / 1e6;
+    if (ms < 1000) return ms.toFixed(ms < 10 ? 2 : 1) + "ms";
+    return (ms / 1000).toFixed(3) + "s";
+  };
+  const nodeName = (id) => (id >= 0 && NODES[id]) ? NODES[id].name : "—";
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const h = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+  const compact = (v) => {
+    if (v === null || v === undefined) return "";
+    if (typeof v !== "object") return String(v);
+    if (Array.isArray(v)) return "[" + v.map(compact).join(", ") + "]";
+    return Object.entries(v).map(([k, x]) => `${k}=${typeof x === "object" ? JSON.stringify(x) : x}`).join(" ");
+  };
+  const pretty = (raw) => {
+    if (raw === undefined || raw === null) return "";
+    try { return JSON.stringify(raw, null, 2); } catch (_) { return String(raw); }
+  };
+
+  // ---------- header ----------
+  $("title").textContent = DATA.title || "";
+  const failed = !!T.violation;
+  $("status").textContent = failed ? "FAILED" : "PASSED";
+  $("status").className = "pill " + (failed ? "fail" : "pass");
+  const endNs = EV.length ? EV[EV.length - 1].t : 0;
+  $("stats").textContent = `seed ${T.seed} · ${NODES.length} nodes · ${EV.length} events · ${fmtTime(endNs)} simulated` + (T.truncated ? " · truncated" : "");
+  if (failed) {
+    const v = $("violation");
+    v.hidden = false;
+    const b = h("b", "", `Invariant violated: ${T.violation.invariant}`);
+    const at = h("span", "meta", `  at ${fmtTime(T.violation.at)}, step ${T.violation.event}`);
+    v.append(b, at, h("pre", "", T.violation.message));
+    $("jump-viol").hidden = false;
+  }
+  if (DATA.replay) {
+    $("replay").hidden = false;
+    $("replay-cmd").textContent = DATA.replay;
+    $("copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(DATA.replay); $("copy").textContent = "Copied"; }
+      catch (_) { $("copy").textContent = "Select & copy"; }
+      setTimeout(() => ($("copy").textContent = "Copy"), 1500);
+    };
+  }
+  $("theme").onclick = () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("simgo-theme", root.dataset.theme); } catch (_) {}
+  };
+  try { const t = localStorage.getItem("simgo-theme"); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+
+  // ---------- derived structure ----------
+  // Messages: send index -> {s, ends: [{i, drop}]}
+  const msgs = new Map();
+  for (const e of EV) {
+    if (!e.m) continue;
+    if (e.k === "send") msgs.set(e.m, { s: e.i, from: e.n, to: e.p, ends: [] });
+    else if ((e.k === "deliver" || e.k === "drop") && msgs.has(e.m)) msgs.get(e.m).ends.push({ i: e.i, drop: e.k === "drop" });
+  }
+  // Intervals for crashes, pauses and partitions.
+  const segs = [];      // {kind, node, s, e}
+  const parts = [];     // {s, e, groups}
+  {
+    const openCrash = {}, openPause = {};
+    let openPart = null;
+    for (const e of EV) {
+      if (e.k === "crash") { openCrash[e.n] = e.i; if (openPause[e.n] !== undefined) { segs.push({ kind: "pause", node: e.n, s: openPause[e.n], e: e.i }); delete openPause[e.n]; } }
+      if (e.k === "restart" && openCrash[e.n] !== undefined) { segs.push({ kind: "down", node: e.n, s: openCrash[e.n], e: e.i }); delete openCrash[e.n]; }
+      if (e.k === "pause") openPause[e.n] = e.i;
+      if (e.k === "resume" && openPause[e.n] !== undefined) { segs.push({ kind: "pause", node: e.n, s: openPause[e.n], e: e.i }); delete openPause[e.n]; }
+      if (e.k === "partition") openPart = { s: e.i, groups: e.g };
+      if (e.k === "heal" && openPart) { parts.push({ ...openPart, e: e.i }); openPart = null; }
+    }
+    const last = EV.length - 1;
+    for (const n in openCrash) segs.push({ kind: "down", node: +n, s: openCrash[n], e: last });
+    for (const n in openPause) segs.push({ kind: "pause", node: +n, s: openPause[n], e: last });
+    if (openPart) parts.push({ ...openPart, e: last });
+  }
+  // Per-node state snapshots: node -> sorted [event index, state].
+  const states = NODES.map(() => []);
+  for (const e of EV) if (e.s !== undefined && e.n >= 0) states[e.n].push([e.i, e.s]);
+
+  // ---------- layout ----------
+  let rowOf = new Int32Array(EV.length);
+  let laneX = [];
+  let showTimers = true, showLogs = false;
+  const visible = (e) => (e.k !== "timer" || showTimers) && (e.k !== "log" || showLogs);
+
+  function layout() {
+    let r = 0;
+    for (const e of EV) { rowOf[e.i] = r; if (visible(e)) r++; }
+    // Hidden events share the row of the next visible one; clamp the tail.
+    const rows = Math.max(r, 1);
+    for (const e of EV) if (rowOf[e.i] >= rows) rowOf[e.i] = rows - 1;
+    const width = Math.max($("scroll").clientWidth, GUTTER + NODES.length * 110 + 40);
+    const laneW = (width - GUTTER - 30) / Math.max(NODES.length, 1);
+    laneX = NODES.map((_, i) => GUTTER + laneW * (i + 0.5));
+    return { width, height: TOP * 2 + rows * ROW };
+  }
+  const yOf = (i) => TOP + rowOf[i] * ROW + ROW / 2;
+
+  // Every drawn element remembers when it becomes visible:
+  //   s = step at which it starts, e = step at which it is complete.
+  let items = [];
+  const track = (node, s, e) => { items.push({ node, s, e: e === undefined ? s : e }); return node; };
+
+  function draw() {
+    const svg = $("svg");
+    svg.replaceChildren();
+    items = [];
+    const { width, height } = layout();
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", height);
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+    // Lane header (HTML, so it stays put while the diagram scrolls).
+    const head = $("lanes-head");
+    head.replaceChildren();
+    NODES.forEach((n, i) => {
+      const d = h("div", "", n.name);
+      d.style.left = laneX[i] + "px";
+      d.dataset.node = i;
+      head.appendChild(d);
+    });
+
+    const bg = el("g", {}, svg);
+    el("rect", { class: "cursor-row", id: "cursor-row", x: 0, y: 0, width, height: ROW }, bg);
+    el("line", { class: "cursor-line", id: "cursor-line", x1: GUTTER - 6, x2: width, y1: 0, y2: 0 }, bg);
+
+    // Partition bands.
+    for (const p of parts) {
+      const y1 = yOf(p.s) - ROW / 2, y2 = yOf(p.e) + ROW / 2;
+      track(el("rect", { class: "part-band", x: GUTTER - 6, y: y1, width: width - GUTTER, height: Math.max(y2 - y1, ROW) }, bg), p.s, p.e);
+    }
+    // Lanes and down/pause segments.
+    const lanes = el("g", {}, svg);
+    NODES.forEach((_, i) => el("line", { class: "lane", x1: laneX[i], x2: laneX[i], y1: TOP, y2: height - TOP }, lanes));
+    for (const sg of segs) {
+      const cls = sg.kind === "down" ? "down-seg" : "pause-seg";
+      track(el("line", { class: cls, x1: laneX[sg.node], x2: laneX[sg.node], y1: yOf(sg.s), y2: yOf(sg.e) }, lanes), sg.s, sg.e);
+    }
+
+    // Message arrows.
+    const defs = el("defs", {}, svg);
+    const mk = el("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+    el("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--accent)" }, mk);
+    const arrows = el("g", {}, svg);
+    for (const m of msgs.values()) {
+      const x1 = laneX[m.from], y1 = yOf(m.s);
+      for (const end of m.ends) {
+        const y2 = yOf(end.i);
+        if (end.drop) {
+          const x2 = x1 + (laneX[m.to] - x1) * 0.55;
+          const ym = y1 === y2 ? y2 + ROW * 0.35 : y2;
+          const g = el("g", {}, arrows);
+          el("line", { class: "arrow drop", x1, y1, x2, y2: ym }, g);
+          el("path", { class: "xmark", d: `M${x2 - 4},${ym - 4} L${x2 + 4},${ym + 4} M${x2 + 4},${ym - 4} L${x2 - 4},${ym + 4}` }, g);
+          track(g, m.s, end.i);
+        } else {
+          track(el("line", { class: "arrow", x1, y1, x2: laneX[m.to], y2, "marker-end": "url(#ah)" }, arrows), m.s, end.i);
+        }
+      }
+    }
+
+    // Event glyphs.
+    const glyphs = el("g", {}, svg);
+    for (const e of EV) {
+      if (!visible(e)) continue;
+      const y = yOf(e.i);
+      const x = e.n >= 0 ? laneX[e.n] : 0;
+      const label = el("text", { class: "gutter", x: 8, y: y + 4 }, glyphs);
+      label.textContent = fmtTime(e.t);
+      track(label, e.i);
+      let g = null;
+      switch (e.k) {
+        case "send": g = el("circle", { class: "dot", cx: x, cy: y, r: 3.5 }); break;
+        case "deliver": g = el("circle", { class: "dot deliver", cx: x, cy: y, r: 4 }); break;
+        case "timer": g = el("circle", { class: "timer", cx: x, cy: y, r: 4.5 }); break;
+        case "start": case "restart": g = el("circle", { class: "boot", cx: x, cy: y, r: 6 }); break;
+        case "crash": g = el("path", { class: "crash", d: `M${x - 7},${y - 7} L${x + 7},${y + 7} M${x + 7},${y - 7} L${x - 7},${y + 7}` }); break;
+        case "pause": case "resume": g = el("rect", { x: x - 6, y: y - 5, width: 12, height: 10, rx: 2, fill: "var(--warn)", opacity: e.k === "pause" ? 1 : .5 }); break;
+        case "skew": g = el("text", { class: "skew", x: x - 5, y: y + 4 }); g.textContent = "⟳"; break;
+        case "emit": {
+          g = el("g", {});
+          el("path", { class: "emit", d: `M${x},${y - 7} L${x + 7},${y} L${x},${y + 7} L${x - 7},${y} z` }, g);
+          const t = el("text", { class: "emit-label", x: x + 11, y: y + 4 }, g);
+          t.textContent = `${e.d} ${compact(e.msg)}`.trim().slice(0, 60);
+          break;
+        }
+        case "log": {
+          g = el("g", {});
+          el("circle", { cx: x, cy: y, r: 2.5, fill: "var(--muted)" }, g);
+          const t = el("text", { class: "log-label", x: x + 8, y: y + 4 }, g);
+          t.textContent = (e.d || "").slice(0, 60);
+          break;
+        }
+        case "partition": case "heal": {
+          g = el("text", { class: "part-label", x: GUTTER, y: y + 4 });
+          g.textContent = e.k === "heal" ? "— partition healed —"
+            : "partition: {" + e.g.map((grp) => grp.map(nodeName).join(", ")).join("} | {") + "}";
+          break;
+        }
+        case "violation": {
+          g = el("g", {});
+          el("rect", { class: "viol-band", x: GUTTER - 6, y: y - ROW / 2 + 2, width: width - GUTTER, height: ROW - 4, rx: 4 }, g);
+          const t = el("text", { class: "viol-label", x: GUTTER + 4, y: y + 4 }, g);
+          t.textContent = "✕ " + (e.d || "").split("\n")[0].slice(0, 120);
+          break;
+        }
+      }
+      if (g) { glyphs.appendChild(g); track(g, e.i); }
+    }
+
+    // Click targets: one transparent row per visible step.
+    const hits = el("g", {}, svg);
+    for (const e of EV) {
+      if (!visible(e)) continue;
+      const r = el("rect", { class: "hit", x: 0, y: yOf(e.i) - ROW / 2, width, height: ROW }, hits);
+      r.addEventListener("click", () => setCursor(e.i));
+    }
+  }
+
+  // ---------- cursor / time travel ----------
+  let cursor = 0;
+  const slider = $("slider");
+  slider.max = Math.max(EV.length - 1, 0);
+
+  function statusAt(i) {
+    const st = NODES.map(() => ({ up: false, paused: false, skew: "" }));
+    for (let j = 0; j <= i && j < EV.length; j++) {
+      const e = EV[j];
+      if (e.n < 0) continue;
+      const s = st[e.n];
+      if (e.k === "start" || e.k === "restart") { s.up = true; s.paused = false; }
+      else if (e.k === "crash") { s.up = false; s.paused = false; }
+      else if (e.k === "pause") s.paused = true;
+      else if (e.k === "resume") s.paused = false;
+      else if (e.k === "skew") { const m = /now off by (.*)\)/.exec(e.d || ""); s.skew = m ? m[1] : "skewed"; }
+    }
+    return st;
+  }
+  function stateAt(node, i) {
+    const arr = states[node];
+    let lo = 0, hi = arr.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid][0] <= i) { best = arr[mid]; lo = mid + 1; } else hi = mid - 1;
+    }
+    return best;
+  }
+
+  function setCursor(i, scroll = true) {
+    if (!EV.length) return;
+    cursor = Math.max(0, Math.min(EV.length - 1, i));
+    slider.value = cursor;
+    for (const it of items) {
+      const cl = it.node.classList;
+      cl.toggle("future", cursor < it.s);
+      cl.toggle("inflight", cursor >= it.s && cursor < it.e);
+    }
+    const y = yOf(cursor);
+    const row = $("cursor-row");
+    row.setAttribute("y", y - ROW / 2);
+    const line = $("cursor-line");
+    line.setAttribute("y1", y); line.setAttribute("y2", y);
+    if (scroll) {
+      const sc = $("scroll");
+      if (y < sc.scrollTop + 40 || y > sc.scrollTop + sc.clientHeight - 40) sc.scrollTop = y - sc.clientHeight / 2;
+    }
+    const e = EV[cursor];
+    $("pos").textContent = `step ${cursor + 1} / ${EV.length} · ${fmtTime(e.t)}`;
+    renderInspector(e);
+  }
+
+  const kindClass = (k) => ({ crash: "bad", violation: "bad", drop: "bad", pause: "warn", resume: "warn", skew: "warn", partition: "warn", heal: "warn", emit: "emit", log: "muted", timer: "muted" }[k] || "");
+  function describe(e) {
+    switch (e.k) {
+      case "send": return `${nodeName(e.n)} → ${nodeName(e.p)}: ${e.mt || "message"}`;
+      case "deliver": return `${nodeName(e.p)} → ${nodeName(e.n)}: ${e.mt || "message"} delivered`;
+      case "drop": return `${nodeName(e.n)} → ${nodeName(e.p)}: ${e.mt || "message"} dropped (${e.d})`;
+      case "timer": return `${nodeName(e.n)}: timer "${e.d}" fired`;
+      case "start": return `${nodeName(e.n)} booted`;
+      case "restart": return `${nodeName(e.n)} restarted (volatile state lost)`;
+      case "crash": return `${nodeName(e.n)} crashed: ${e.d}`;
+      case "pause": return `${nodeName(e.n)} paused: ${e.d}`;
+      case "resume": return `${nodeName(e.n)} resumed`;
+      case "skew": return `${nodeName(e.n)}: ${e.d}`;
+      case "partition": return "network partitioned: {" + e.g.map((g) => g.map(nodeName).join(", ")).join("} | {") + "}";
+      case "heal": return "network partition healed";
+      case "emit": return `${nodeName(e.n)} emitted "${e.d}"`;
+      case "log": return `${nodeName(e.n)}: ${e.d}`;
+      case "violation": return e.d;
+      default: return e.k;
+    }
+  }
+
+  function renderInspector(e) {
+    const ins = $("inspector");
+    ins.replaceChildren();
+    ins.appendChild(h("h2", "", "This step"));
+    const card = h("div", "card");
+    card.append(h("span", "kind " + kindClass(e.k), e.k), h("div", "", describe(e)));
+    card.appendChild(h("div", "meta", `step ${e.i + 1} · t=${fmtTime(e.t)}${e.m ? " · message #" + e.m : ""}`));
+    if (e.msg !== undefined) card.appendChild(h("pre", "json", pretty(e.msg)));
+    ins.appendChild(card);
+
+    ins.appendChild(h("h2", "", "Cluster at this step"));
+    const st = statusAt(cursor);
+    NODES.forEach((n, i) => {
+      const c = h("div", "card" + ((e.n === i || e.p === i) ? " active" : ""));
+      const head = h("div", "node-head", n.name);
+      const s = st[i];
+      const label = !s.up ? "down" : s.paused ? "paused" : "up";
+      head.appendChild(h("span", "status " + label, label));
+      if (s.skew) head.appendChild(h("span", "skewed", "clock " + s.skew));
+      c.appendChild(head);
+      const snap = s.up ? stateAt(i, cursor) : null;
+      if (snap) {
+        c.appendChild(h("pre", "json", pretty(snap[1])));
+        if (snap[0] !== cursor) c.appendChild(h("div", "meta", `state as of step ${snap[0] + 1}`));
+      } else c.appendChild(h("div", "empty", s.up ? "no snapshot (node does not implement Snapshotter)" : "no state: node is down"));
+      ins.appendChild(c);
+    });
+    // Lane header status
+    document.querySelectorAll("#lanes-head div").forEach((d) => {
+      const i = +d.dataset.node, s = st[i];
+      d.className = (!s.up ? "down" : s.paused ? "paused" : "") + ((e.n === i || e.p === i) ? " active" : "");
+    });
+  }
+
+  // ---------- controls ----------
+  let timer = null;
+  const stop = () => { clearInterval(timer); timer = null; $("play").textContent = "▶ Play"; };
+  const play = () => {
+    if (cursor >= EV.length - 1) setCursor(0);
+    $("play").textContent = "⏸ Pause";
+    timer = setInterval(() => { if (cursor >= EV.length - 1) stop(); else setCursor(nextVisible(cursor, 1)); }, 120);
+  };
+  const nextVisible = (i, dir) => {
+    let j = i + dir;
+    while (j > 0 && j < EV.length - 1 && !visible(EV[j])) j += dir;
+    return j;
+  };
+  $("play").onclick = () => (timer ? stop() : play());
+  $("first").onclick = () => { stop(); setCursor(0); };
+  $("last").onclick = () => { stop(); setCursor(EV.length - 1); };
+  $("prev").onclick = () => { stop(); setCursor(nextVisible(cursor, -1)); };
+  $("next").onclick = () => { stop(); setCursor(nextVisible(cursor, 1)); };
+  $("jump-viol").onclick = () => { stop(); setCursor(T.violation.event); };
+  slider.oninput = () => { stop(); setCursor(+slider.value); };
+  $("show-timers").onchange = (ev) => { showTimers = ev.target.checked; draw(); setCursor(cursor); };
+  $("show-logs").onchange = (ev) => { showLogs = ev.target.checked; draw(); setCursor(cursor); };
+  $("scroll").addEventListener("scroll", () => { $("lanes-head").scrollLeft = $("scroll").scrollLeft; });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target.tagName === "INPUT" && ev.target.type !== "range") return;
+    const step = ev.shiftKey ? 10 : 1;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { stop(); setCursor(ev.shiftKey ? cursor + step : nextVisible(cursor, 1)); ev.preventDefault(); }
+    else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { stop(); setCursor(ev.shiftKey ? cursor - step : nextVisible(cursor, -1)); ev.preventDefault(); }
+    else if (ev.key === " ") { timer ? stop() : play(); ev.preventDefault(); }
+    else if (ev.key === "Home") { stop(); setCursor(0); }
+    else if (ev.key === "End") { stop(); setCursor(EV.length - 1); }
+    else if ((ev.key === "v" || ev.key === "V") && failed) { stop(); setCursor(T.violation.event); }
+  });
+  let resizeTimer = null;
+  addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { draw(); setCursor(cursor, false); }, 150); });
+
+  draw();
+  setCursor(failed ? T.violation.event : EV.length - 1);
+})();
+</script>
+</body>
+</html>
