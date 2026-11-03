@@ -10,13 +10,13 @@ task lands as its own commit.
 - [x] CI: build, vet, test (race detector), determinism check
 
 ## Phase 1: Simulation core (`sim`)
-- [ ] Virtual clock and deterministic event queue
-- [ ] Simulated network: latency, reordering, loss, duplication, partitions
-- [ ] Simulated disk with fsync semantics (unsynced writes lost on crash)
-- [ ] Nemesis: random crashes, restarts, pauses, partitions, clock skew
-- [ ] Invariants checked after every step; node panics reported as violations
-- [ ] Trace recording with per-node state snapshots
-- [ ] Tests: determinism (same seed gives the same trace hash), network, disk, faults
+- [x] Virtual clock and deterministic event queue
+- [x] Simulated network: latency, reordering, loss, duplication, partitions
+- [x] Simulated disk with fsync semantics (unsynced writes lost on crash)
+- [x] Nemesis: random crashes, restarts, pauses, partitions, clock skew
+- [x] Invariants checked after every step; node panics reported as violations
+- [x] Trace recording with per-node state snapshots
+- [x] Tests: determinism (same seed gives the same trace hash), network, disk, faults
 
 ## Phase 2: Time-travel debugger (`viewer`, `simtest`)
 - [ ] Self-contained HTML viewer: space-time diagram, scrubber, state inspector
