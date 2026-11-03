@@ -19,12 +19,12 @@ task lands as its own commit.
 - [x] Tests: determinism (same seed gives the same trace hash), network, disk, faults
 
 ## Phase 2: Time-travel debugger (`viewer`, `simtest`)
-- [ ] Self-contained HTML viewer: space-time diagram, scrubber, state inspector
-- [ ] `simtest.Explore`: run many seeds from `go test`, write a trace for each failure
-- [ ] Replay a single seed with `SIMGO_SEED=<n>`
+- [x] Self-contained HTML viewer: space-time diagram, scrubber, state inspector
+- [x] `simtest.Explore`: run many seeds from `go test`, write a trace for each failure
+- [x] Replay a single seed with `SIMGO_SEED=<n>`
 
 ## Phase 3: Showcase examples
-- [ ] Lease-based job runner: SimGo finds the double-charge bug, the fenced version passes
+- [x] Lease-based job runner: SimGo finds the double-charge bug, the fenced version passes
 - [ ] Find a seeded bug in a real Raft library (etcd raft)
 - [ ] Find the classic "missing fsync" bug in a write-ahead log
 
