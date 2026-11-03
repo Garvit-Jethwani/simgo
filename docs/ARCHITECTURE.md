@@ -1,0 +1,235 @@
+# SimGo architecture
+
+SimGo is a deterministic simulation tester for distributed systems written in
+Go, with a time-travel debugger for the failures it finds.
+
+The idea comes from FoundationDB and TigerBeetle: run the whole cluster inside
+one process, replace every source of nondeterminism (clock, network, disk,
+randomness) with a simulated version controlled by a single seed, then inject
+faults far faster than they would ever happen in production. When an
+invariant breaks, the seed reproduces the exact same run, every time.
+
+## Goals
+
+1. **Reproducibility.** Same seed and same code produce a byte-identical trace.
+2. **Realistic faults.** Message loss, reordering, duplication, partitions,
+   crashes with lost unsynced writes, process pauses, clock skew.
+3. **Speed.** Virtual time: a 60-second scenario runs in milliseconds, so a
+   laptop can explore thousands of seeds per minute.
+4. **Understandable failures.** Every failure comes with a visual, scrubbable
+   timeline of what each node did and what it believed at each step.
+5. **Plain `go test`.** No new runtime, no daemon, no code generation.
+
+## Non-goals (for now)
+
+- Testing arbitrary binaries or other languages (Antithesis's territory).
+- Proving correctness. SimGo searches for bugs; it does not prove their absence.
+- Unmodified goroutine-based code. That is Phase 4 (see the roadmap).
+
+## Component overview
+
+```mermaid
+flowchart LR
+    subgraph test["go test process"]
+        T["Your test<br/>simtest.Explore"] -->|seeds| S
+        subgraph S["sim.Simulator (single goroutine)"]
+            Q["Event queue<br/>(virtual time, seq)"]
+            N["Nodes under test<br/>Start / Receive / Timer"]
+            NET["Simulated network"]
+            D["Simulated disks"]
+            NEM["Nemesis<br/>(fault injector)"]
+            INV["Invariants"]
+            TR["Trace recorder"]
+            Q --> N
+            N -->|Send| NET --> Q
+            N -->|Write / Sync| D
+            NEM --> Q
+            N --> TR
+            Q --> INV
+        end
+        S -->|violation + trace| V["viewer.Write<br/>self-contained HTML"]
+    end
+    V --> B["Browser:<br/>time-travel debugger"]
+```
+
+### Simulator (`sim`)
+
+A single goroutine pops the earliest event from a priority queue ordered by
+`(virtual time, sequence number)`, advances the clock to it, and handles it.
+Sequence numbers break ties, so events at the same instant always run in the
+order they were scheduled. Nothing else runs concurrently, so there are no
+data races and no scheduler nondeterminism.
+
+| Event      | What happens                                                                 |
+|------------|------------------------------------------------------------------------------|
+| `deliver`  | A message reaches its target. Dropped if the target is down or partitioned.  |
+| `timer`    | A node timer fires. Ignored if cancelled, replaced, or the node restarted.   |
+| `fault`    | The nemesis applies a fault: partition, heal, crash, restart, pause, skew.   |
+| `resume`   | A paused node wakes up and processes the events queued while it was frozen.  |
+
+After every event the simulator runs all invariants. The first failure stops
+the run and is recorded as a violation. A panic inside node code is also
+reported as a violation, with the panic message.
+
+### Nodes
+
+Nodes are event handlers:
+
+```go
+type Node interface {
+    Start(env *sim.Env)                                // boot and every restart
+    Receive(env *sim.Env, from sim.NodeID, msg sim.Message)
+    Timer(env *sim.Env, name string)
+}
+```
+
+`Env` is the only way a node touches the world: `Now()`, `Send()`,
+`SetTimer()`, `Rand()`, `Disk()`, `Logf()`, `Emit()`. This is the same shape as
+etcd's raft library and TigerBeetle's state machines, and it is what makes
+perfect determinism possible (see [ADR 0002](adr/0002-event-handler-nodes.md)).
+
+### Simulated network
+
+- Latency drawn uniformly from `[MinLatency, MaxLatency]` per message, which
+  naturally reorders messages.
+- `DropRate` and `DupRate` for loss and duplication.
+- Partitions are checked at delivery time, so messages already in flight
+  when a partition starts are lost, as they would be on a real network.
+
+### Simulated disk
+
+Writes land in a buffer that reads can see immediately, but only `Sync()`
+makes them durable. A crash discards everything unsynced. This reproduces
+"forgot to fsync" bugs exactly.
+
+### Nemesis
+
+At random intervals (mean `Faults.Interval`) the nemesis picks an enabled
+fault:
+
+| Fault      | Effect                                                                   | Undone by           |
+|------------|--------------------------------------------------------------------------|---------------------|
+| Partition  | Split nodes into two groups that cannot talk                             | Heal after a delay  |
+| Crash      | Lose all volatile state and unsynced writes, cancel timers               | Restart after delay |
+| Pause      | Freeze a node (GC pause, VM stall); its events queue up                  | Resume after delay  |
+| Clock skew | Shift one node's local clock forward or backward                         | Never               |
+
+`Faults.Protected` nodes are never crashed or paused, for nodes that model
+external infrastructure such as a managed database.
+
+### Trace and time-travel viewer
+
+Every step is appended to a `Trace`: sends, deliveries, drops, timers, faults,
+logs, emissions, and a JSON snapshot of the node's state after each event it
+handled (for nodes that implement `Snapshotter`). A SHA-256 of the trace is
+the run's fingerprint; running a seed twice must give the same fingerprint,
+which `simtest` checks automatically.
+
+`viewer.Write` turns a trace into a single HTML file with no external
+dependencies:
+
+```mermaid
+flowchart TB
+    subgraph html["trace.html (self-contained)"]
+        D["Space-time diagram<br/>one lane per node, arrows for messages,<br/>markers for crashes, pauses, partitions"]
+        S["Scrubber<br/>step back / forward / play"]
+        I["Inspector<br/>event details + every node's state<br/>as of the selected step"]
+        S --> D
+        S --> I
+    end
+```
+
+### Test harness (`simtest`)
+
+```go
+func TestNoDoubleCharge(t *testing.T) {
+    simtest.Explore(t, cfg, simtest.Options{Seeds: 500})
+}
+```
+
+`Explore` runs many seeds in parallel (each simulation is single-threaded and
+independent). For every failing seed it writes `trace.html` and prints a
+one-line replay command:
+
+```
+SIMGO_SEED=4182 go test -run TestNoDoubleCharge ./examples/lease
+```
+
+## Execution flow of one run
+
+```mermaid
+sequenceDiagram
+    participant T as simtest
+    participant S as Simulator
+    participant N as Node code
+    participant I as Invariants
+    T->>S: Run(cfg with seed)
+    S->>N: Start(env) for every node
+    loop until Duration elapses or a violation occurs
+        S->>S: pop earliest event, advance virtual clock
+        S->>N: Receive / Timer (or apply fault)
+        N->>S: Send / SetTimer / Disk / Emit (recorded in trace)
+        S->>I: Check(world)
+        I-->>S: ok or violation
+    end
+    S-->>T: Result{Violation, Trace, Fingerprint}
+    T->>T: on failure: write trace.html, print replay command
+```
+
+## Deployment
+
+### Today: local and CI
+
+SimGo is a library. It runs wherever `go test` runs: a laptop, or GitHub
+Actions (see `.github/workflows/ci.yml`). Failing traces are uploaded as CI
+artifacts.
+
+### Phase 5: hosted exploration on AWS
+
+Running a few hundred seeds per commit catches common bugs. Rare
+interleavings need millions. The hosted service fans seeds out across cheap
+Spot capacity and keeps the failures.
+
+```mermaid
+flowchart LR
+    GH["GitHub<br/>(push / PR)"] -->|webhook| API["API<br/>(Lambda + API Gateway)"]
+    API -->|job: repo, test, seed range| SQS["SQS queue"]
+    SQS --> BATCH["AWS Batch on EC2 Spot<br/>workers run: go test with seed ranges"]
+    BATCH -->|failing traces| S3["S3<br/>trace.html per failure"]
+    BATCH -->|run summaries| DDB["DynamoDB<br/>runs, seeds, fingerprints"]
+    S3 --> CF["CloudFront<br/>hosted viewer"]
+    DDB --> API
+    API -->|PR comment with viewer link| GH
+```
+
+- **Workers** are stateless containers: check out the commit, build the test
+  binary once, run it over a range of seeds. A failure is just a seed number
+  plus a trace, so a Spot interruption loses nothing important.
+- **De-duplication:** failures are grouped by the violated invariant and the
+  last few events, so one bug found by 300 seeds shows up once.
+- **Cost control:** seed budgets per repository, and the most recent commits
+  are explored first.
+
+## Determinism rules for node code
+
+Node code must not:
+
+- start goroutines,
+- read the wall clock (`time.Now`, `time.Since`),
+- use global randomness (`math/rand` top-level functions),
+- iterate over maps when the order affects behaviour or messages,
+- do real I/O.
+
+Breaking these rules makes runs irreproducible. `simtest` detects it by running
+each failing seed twice and comparing fingerprints. A static linter for these
+rules is planned.
+
+## Repository layout
+
+```
+sim/         simulator core: queue, network, disk, nemesis, trace
+simtest/     go test integration: Explore, replay, determinism check
+viewer/      self-contained HTML time-travel debugger
+examples/    real bugs SimGo finds, with fixed versions
+docs/        architecture, ADRs, roadmap
+```

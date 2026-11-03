@@ -1,0 +1,3 @@
+# Traces written by local test runs
+/simgo-traces/
+*.trace.html
