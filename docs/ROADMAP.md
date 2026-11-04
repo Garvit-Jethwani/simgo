@@ -32,13 +32,13 @@ task lands as its own commit.
 - [x] Spike: simulated TCP network on Go 1.25 `testing/synctest` (`x/simnet`): real `net.Conn` / `net.Listener`, latency, FIFO order, deadlines, partitions, crashes
 - [x] Experiment: measure reproducibility of goroutine code (exact unless two goroutines of one process race at the same instant)
 - [x] Design document and ADR 0004
-- [ ] Process model: node as `func(ctx, *Process)`, crash cancels and waits, restart re-runs
-- [ ] Simulated file API on `sim.Disk` semantics (Open, Write, Sync, Rename)
-- [ ] Seeded nemesis goroutine with jittered fault instants
-- [ ] Goroutine-safe `Emit` and invariants checked between instants
-- [ ] Convert simnet logs to `sim.Trace` so the time-travel viewer works unchanged
-- [ ] Reproduction report: re-run failing seeds and report the rate
-- [ ] Showcase: an unmodified goroutine-based service with retries and a lease
+- [x] Process model: node as `func(ctx, *Process)`; crash cancels the context, closes connections and fences off the old incarnation; restart re-runs
+- [x] Crash-aware disk on `sim.Disk` semantics (Write, Delete, Sync, Read, Keys)
+- [x] Seeded nemesis goroutine with jittered fault instants
+- [x] Goroutine-safe `Emit`; invariants checked on every emission and at the end
+- [x] Convert simnet logs to `sim.Trace` so the time-travel viewer works unchanged
+- [x] Reproduction report: re-run failing seeds and report the rate
+- [x] Showcase: a primary/backup service on unmodified `net/http` (async replication bug found, fix verified)
 
 ## Phase 5: Hosted exploration on AWS
 - [ ] Run millions of seeds on Spot capacity (AWS Batch)

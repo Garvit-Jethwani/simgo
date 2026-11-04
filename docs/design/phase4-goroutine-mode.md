@@ -1,6 +1,6 @@
 # Phase 4 design: running ordinary goroutine-based Go code
 
-- Status: spike complete, design proposed
+- Status: implemented (`x/simproc`, `x/simnet`, `examples/httpkv`)
 - Date: 2026-11-04
 - Prototype: [`x/simnet`](../../x/simnet)
 - Decision record: [ADR 0004](../adr/0004-goroutine-mode-on-synctest.md)
@@ -177,3 +177,32 @@ races are common in real code.
   fake time; code must use the simulated network and disk.
 - Requires Go 1.25 and must run inside `go test` (`synctest.Test` takes a
   `*testing.T`).
+
+## Results after implementation
+
+`x/simproc` implements the plan above. The showcase,
+[`examples/httpkv`](../../examples/httpkv), is a primary/backup key-value
+service written with the standard library's `http.Server` and `http.Client`;
+the only SimGo-specific code is `Process.Listen` and `Process.DialContext`.
+
+| Check | Result |
+|-------|--------|
+| Async replication (acknowledge before the backup has the write) | Acknowledged write missing after failover in 4 of 40 seeds |
+| Sync replication (acknowledge after the backup confirmed) | 40 of 40 seeds pass under crashes and partitions |
+| Progress without faults | Every attempted write acknowledged and read back |
+| Reproducibility of the failing seeds | 12 of 12 replays byte-identical; 10 of 12 under the race detector |
+
+The race detector changes goroutine scheduling, which exposes a few
+same-instant races inside `net/http`'s own goroutines. That is the case this
+design anticipated, and why `Explore` reports a reproduction rate for every
+failing seed instead of assuming it.
+
+Two more simulator bugs were found while building the showcase, both caused
+by goroutines running at the same instant or outliving the run:
+
+- `Dial` looked up the listener when it started instead of when the
+  connection request arrived, so a server and client starting together
+  raced. Fixed by looking up on arrival, as a real network would.
+- A dial waiting out its handshake when the run ended could never finish,
+  because fake time stops with the bubble. Dials now fail as soon as their
+  host crashes, and `Network.Close` crashes every host.

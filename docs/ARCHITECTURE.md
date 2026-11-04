@@ -160,6 +160,38 @@ one-line replay command:
 SIMGO_SEED=4182 go test -run TestNoDoubleCharge ./examples/lease
 ```
 
+## Goroutine mode (`x/simproc`)
+
+The core requires event-handler nodes. Goroutine mode runs ordinary Go
+programs instead, inside a Go 1.25 `testing/synctest` bubble:
+
+```mermaid
+flowchart LR
+    subgraph bubble["synctest bubble (fake clock)"]
+        P1["node: func(ctx, *Process)<br/>http.Server, goroutines, time.Sleep"]
+        P2["node: func(ctx, *Process)"]
+        NET["x/simnet<br/>net.Conn / net.Listener<br/>latency, FIFO, partitions"]
+        NEM["nemesis goroutine<br/>seeded crashes, partitions"]
+        EM["Emit + invariants"]
+        P1 <--> NET <--> P2
+        NEM --> NET
+        NEM -->|cancel ctx, drop unsynced writes| P1
+        P1 --> EM
+    end
+    bubble --> TR["canonical sim.Trace"] --> V["time-travel viewer"]
+```
+
+- Time is Go's own `time` package; it advances only when every goroutine is
+  blocked, so simulated time costs nothing.
+- A crash cancels the node's context, crashes its network host, and drops
+  unsynced disk writes. The old incarnation's `Process` stops working.
+- The network log and cluster events are merged into a `sim.Trace` in
+  canonical order, so the same viewer works.
+- Runs are reproducible unless two goroutines of the same process race at
+  the same virtual instant. `Explore` re-runs every failing seed and reports
+  the reproduction rate. See the
+  [Phase 4 design](design/phase4-goroutine-mode.md) for the measurements.
+
 ## Execution flow of one run
 
 ```mermaid
@@ -240,7 +272,9 @@ examples/    real bugs SimGo finds, with fixed versions
   wal/       write-ahead log with group commit (lost acknowledged writes)
   raft/      the real etcd raft library (separate Go module, so the core
              library stays dependency-free)
+  httpkv/    primary/backup service on unmodified net/http (goroutine mode)
 x/simnet/    EXPERIMENTAL: simulated TCP network for goroutine code (Phase 4)
+x/simproc/   EXPERIMENTAL: goroutine mode: processes, crashes, invariants
 docs/        architecture, ADRs, design documents, roadmap
 ```
 
