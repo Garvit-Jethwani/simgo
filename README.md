@@ -5,141 +5,180 @@ time-travel debugger for every bug it finds.**
 
 SimGo runs your whole cluster inside one `go test` process. It controls the
 clock, the network, the disks and every random number, then throws crashes,
-partitions, process pauses, lost packets and clock skew at your code
-thousands of times per minute. When something breaks, you get:
+partitions, process pauses, lost packets and clock skew at your code,
+thousands of runs per minute. When something breaks you get:
 
-- the **seed** that reproduces exactly the same run, every time, and
+- the **seed** that replays the failing run, and
 - a **time-travel debugger**: one self-contained HTML file showing every
   node, message and fault on a timeline you can scrub back and forth, with
   each node's state at every step.
 
-![SimGo time-travel debugger showing a double-charge bug](docs/images/viewer.png)
+![Stepping back through a double-charge bug in the time-travel debugger](docs/images/demo.gif)
 
 Rust has [MadSim](https://github.com/madsim-rs/madsim) and
-[Turmoil](https://github.com/tokio-rs/turmoil). SimGo brings the same
-technique to Go.
+[Turmoil](https://github.com/tokio-rs/turmoil); FoundationDB and TigerBeetle
+built their own simulators. SimGo brings the technique to Go.
 
-> Status: early development. See the [roadmap](docs/ROADMAP.md).
+> **Status:** v0.1, early. The core (event-handler mode) is stable enough to
+> use; goroutine mode and the hosted service are experimental. See the
+> [roadmap](docs/ROADMAP.md).
 
-## What it has found so far
+## What it has found
 
-Three examples, each with a buggy and a fixed version. The buggy ones look
-reasonable and pass ordinary tests.
+Each example has a buggy and a fixed version. The buggy ones look reasonable
+and pass ordinary tests.
 
-| Example | Bug | SimGo result |
-|---------|-----|--------------|
-| [`examples/raft`](examples/raft): the real [etcd raft](https://github.com/etcd-io/raft) library | fsync batched on a 50ms timer instead of before sending (breaks raft's storage contract) | **Two leaders in the same term** (seed 404) and **different data committed at the same log index** (seed 1251), out of 3,000 seeds. In 376 more seeds raft's own corruption check fires. Correct storage passes 300 seeds. |
-| [`examples/lease`](examples/lease): lease-based payment runner | Leader keeps charging after its lease expired (pause, partition, clock skew); lost "done" acknowledgement | A customer charged twice in 175 of 200 seeds, from two different bugs. The fenced version passes 500 seeds. |
+| Example | The bug | What SimGo found |
+|---------|---------|------------------|
+| [`examples/raft`](examples/raft): the real [etcd raft](https://github.com/etcd-io/raft) library | fsync batched on a 50ms timer instead of before sending (breaks raft's storage contract) | **Two leaders in one term** and **different data committed at the same log index**, plus 376 runs where raft's own corruption check fired, in 3,000 seeds. Correct storage passes 300 seeds. |
+| [`examples/httpkv`](examples/httpkv): primary/backup service on **unmodified `net/http`** | Writes acknowledged before replication | Acknowledged writes missing after failover in 4 of 40 seeds; every failure replayed byte-identically (12 of 12). Synchronous replication passes. |
+| [`examples/lease`](examples/lease): lease-based payment runner | Leader keeps charging after losing its lease; lost "done" acknowledgement | Customers charged twice in 175 of 200 seeds, from **two distinct bugs** that hosted exploration reports separately. The fenced version passes 500 seeds. |
 | [`examples/wal`](examples/wal): key-value server with group commit | Write acknowledged before the fsync that covers it | Acknowledged writes lost on crash in 100 of 100 seeds. Acking after fsync passes 300 seeds with the same throughput. |
 
-### etcd raft, under SimGo
+<details>
+<summary>Screenshots: two Raft leaders in term 7, and a lost write in net/http</summary>
 
-etcd raft is a deterministic state machine (`Tick`, `Step`, `Ready`), so it
-runs unmodified inside SimGo. Two things came out of it:
+![etcd raft with batched fsync: term 7 has two leaders](docs/images/raft-two-leaders.png)
 
-- **SimGo's determinism check caught raft's own randomness.** raft draws
-  election timeouts from `crypto/rand`, so the same seed gave different runs.
-  The example starts elections from a seeded SimGo timer through raft's
-  public `Campaign` API instead, and every seed then replays exactly.
-- **One "optimisation" breaks Raft's safety.** Batching fsyncs on a timer lets
-  a crash erase a vote the node already cast, or log entries it already
-  acknowledged. SimGo turns that into concrete, replayable runs:
+![net/http primary/backup: an acknowledged write missing after failover](docs/images/httpkv-lost-write.png)
 
-```
-seed 404: invariant "election safety: at most one leader per term" violated at 13.98s:
-    term 7 has two leaders: n3 and n2
-seed 1251: invariant "state machine safety: same entry applied at each index" violated at 17.50s:
-    index 6: n3 applied "n3-v1@14992ms" (term 5) but n1 applied "n1-v2@14014ms" (term 4)
-```
+</details>
 
-The raft example is a separate Go module, so SimGo itself has no
-dependencies.
+## Two ways to test
 
-### The double-charge example
+### Event-handler mode: exact replay
 
-```
-$ go test -v ./examples/lease
-=== RUN   TestNaiveWorkerDoubleCharges
-    found the bug in 175 of 200 seeds; first: seed 1
-    invariant "each job is charged at most once" violated at 22.94s: job 28 charged twice: first by n3, again by n3
-    trace: /tmp/simgo/TestNaiveWorkerDoubleCharges-seed-1.html
---- PASS: TestNaiveWorkerDoubleCharges (0.17s)
-=== RUN   TestFencedWorkerNeverDoubleCharges
-    simgo: 500 seeds explored, no violations
---- PASS: TestFencedWorkerNeverDoubleCharges (2.00s)
-```
-
-## Writing a SimGo test
-
-Nodes are event handlers. Everything they touch (time, network, disk,
-randomness) comes from `*sim.Env`, which is what makes runs reproducible.
+Nodes are event handlers; SimGo owns everything nondeterministic. The same
+seed always produces a byte-identical trace. This is how etcd raft runs
+unmodified.
 
 ```go
 type Worker struct{ /* state */ }
 
-func (w *Worker) Start(env *sim.Env)                                      { env.SetTimer("tick", time.Second) }
-func (w *Worker) Timer(env *sim.Env, name string)                         { env.Send(dbNode, Acquire{}) }
-func (w *Worker) Receive(env *sim.Env, from sim.NodeID, msg sim.Message)  { /* ... */ }
-```
+func (w *Worker) Start(env *sim.Env)                                     { env.SetTimer("tick", time.Second) }
+func (w *Worker) Timer(env *sim.Env, name string)                        { env.Send(db, Acquire{}) }
+func (w *Worker) Receive(env *sim.Env, from sim.NodeID, msg sim.Message) { /* ... env.Emit("charge", job) */ }
 
-Describe the cluster, the faults, and what must always be true:
-
-```go
 func TestNoDoubleCharge(t *testing.T) {
-    cfg := sim.Config{
+    simtest.Explore(t, sim.Config{
         Nodes:   4,
         NewNode: newNode,
-        Network: sim.NetworkConfig{MaxLatency: 20 * time.Millisecond, DropRate: 0.01},
         Faults: sim.FaultConfig{
             Interval: 2 * time.Second,
             Pauses: true, Crashes: true, Partitions: true, ClockSkew: true,
-            Protected: []sim.NodeID{0}, // the database never crashes
         },
-        Invariants: []sim.Invariant{{
-            Name:  "each job is charged at most once",
-            Check: noDoubleCharge, // inspects w.Emitted("charge")
-        }},
-    }
-    simtest.Explore(t, cfg, simtest.Options{Seeds: 500})
+        Invariants: []sim.Invariant{noDoubleCharge}, // checks w.Emitted("charge")
+    }, simtest.Options{Seeds: 500})
 }
 ```
 
-When a seed fails, the test output tells you exactly how to look at it and
-replay it:
-
 ```
-seed 4182: invariant "each job is charged at most once" violated at 31.2s: ...
-    trace:  /tmp/simgo/TestNoDoubleCharge-seed-4182.html
-    replay: SIMGO_SEED=4182 go test -run '^TestNoDoubleCharge$' ./yourpkg
+simgo: seed 2: invariant "each job is charged at most once" violated at 12.83s: job 19 charged by two workers: first n2, then n3
+    trace:  /tmp/simgo/TestNoDoubleCharge-seed-2.html
+    replay: SIMGO_SEED=2 go test -run '^TestNoDoubleCharge$' ./examples/lease
 ```
 
-| Variable | Effect |
-|----------|--------|
-| `SIMGO_SEED=n` | Run only seed `n` and always write its trace |
-| `SIMGO_SEEDS=n` | Explore `n` seeds instead of the test's default |
-| `SIMGO_OUT=dir` | Write traces to `dir` (default `$TMPDIR/simgo`) |
+A 20-second simulation of 5 nodes under every fault type runs in about
+3 ms.
 
-## What SimGo simulates
+### Goroutine mode: ordinary Go code (experimental)
 
-| Fault | Effect |
-|-------|--------|
-| Network | Latency and reordering, message loss, duplication |
-| Partitions | Nodes split into groups; in-flight messages across the split are lost |
-| Crashes | Volatile state and timers are lost, **unsynced disk writes are lost**, the node restarts later |
-| Pauses | A node freezes (GC pause, VM stall) while the rest of the cluster moves on |
-| Clock skew | A node's local clock jumps forward or backward |
+Write services the normal way, with goroutines, `net/http` and
+`time.Sleep`. Take the listener, dialer and disk from SimGo; it runs them on
+Go 1.25's `testing/synctest` fake clock over a simulated network.
 
-A 20-second simulation of 5 nodes under all of these faults runs in about
-3 ms, around 7,000 times faster than real time.
+```go
+func primary(ctx context.Context, p *simproc.Process) error {
+    ln, _ := p.Listen(80)
+    srv := &http.Server{Handler: mux(p)}
+    go func() { <-ctx.Done(); srv.Close() }()
+    srv.Serve(ln)
+    return nil
+}
 
-## How it works
+client := &http.Client{Transport: &http.Transport{DialContext: p.DialContext}}
+```
 
-Read the [architecture document](docs/ARCHITECTURE.md) and the
-[design decisions](docs/adr).
+Replays are exact unless two goroutines of the same process race at the
+same virtual instant, so every failure reports its measured reproduction
+rate:
 
-## Requirements
+```
+simproc: seed 20: invariant "acknowledged writes are readable after failover" violated at 6.59s: key k24 was acknowledged but backup does not have it
+    reproduced: exactly, 5 of 5 replays
+```
 
-Go 1.25 or newer.
+Why it works and where it stops: [Phase 4 design](docs/design/phase4-goroutine-mode.md).
+
+## Hosted exploration on AWS
+
+Hundreds of seeds per commit catch common bugs; rare interleavings need
+hundreds of thousands. `cloud/` splits a job into seed shards, runs them on
+Fargate Spot workers that scale from zero with the queue, groups failures
+into distinct bugs and keeps their traces. Terraform is in `deploy/aws/`.
+
+```bash
+cd cloud
+```
+
+```bash
+SIMGO_DEMO=1 go run ./cmd/simgo-cloud local -repo .. -package ./examples/lease -test TestDemoNaiveWorker -seeds 2000 -shard-size 250 -workers 4
+```
+
+```
+job 20261104-a8aab331f878ca6e (done): 8/8 shards done, 0 failed, 2000 seeds run, 1669 failing seeds
+
+  bug 1: "each job is charged at most once" in 880 seeds (first: 2)
+    job 19 charged by two workers: first n2, then n3
+  bug 2: "each job is charged at most once" in 789 seeds (first: 1)
+    job 28 charged twice by the same worker n3
+```
+
+See the [deployment guide](docs/deploy/aws.md).
+
+## Getting started
+
+Requires Go 1.25 or newer.
+
+```bash
+go get github.com/Garvit-Jethwani/simgo
+```
+
+Then read the [guide](docs/guide.md). To watch SimGo find a bug and open
+its trace:
+
+```bash
+SIMGO_DEMO=1 go test -run TestDemoNaiveWorker ./examples/lease
+```
+
+## Documentation
+
+- [Writing SimGo tests](docs/guide.md): both modes, invariants, traces, environment variables
+- [Architecture](docs/ARCHITECTURE.md): components, diagrams, determinism rules
+- [Design decisions](docs/adr): why a single-threaded core, event handlers, the trace format, goroutine mode
+- [Phase 4 design](docs/design/phase4-goroutine-mode.md): goroutine mode, with the reproducibility experiment
+- [Deploying on AWS](docs/deploy/aws.md)
+- [Roadmap](docs/ROADMAP.md) and [changelog](CHANGELOG.md)
+
+## Project layout
+
+```
+sim/          simulator core: event queue, network, disk, nemesis, trace
+simtest/      go test integration: Explore, replay, JSON reports
+viewer/       self-contained HTML time-travel debugger
+x/simnet/     experimental: simulated TCP network on testing/synctest
+x/simproc/    experimental: goroutine mode
+examples/     lease, wal, raft (separate module), httpkv
+cloud/        hosted exploration (separate module): core, AWS stores, CLI, Lambda
+deploy/aws/   Terraform
+```
+
+The core library has no dependencies. The etcd raft example and the cloud
+service are separate Go modules.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
