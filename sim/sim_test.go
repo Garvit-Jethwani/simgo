@@ -316,3 +316,25 @@ func TestMessagesCanNameThemselves(t *testing.T) {
 		}
 	}
 }
+
+// A panic must not make the trace nondeterministic: stack traces contain
+// pointer values, goroutine IDs, and the frames of whoever called Run.
+func TestNodePanicIsDeterministic(t *testing.T) {
+	cfg := Config{Nodes: 1, NewNode: func(NodeID) Node { return panicker{} }}
+	direct := Run(cfg)
+	viaGoroutine := make(chan *Result)
+	go func() {
+		func() { viaGoroutine <- Run(cfg) }() // a different call path
+	}()
+	other := <-viaGoroutine
+	if direct.Fingerprint() != other.Fingerprint() {
+		t.Fatalf("panic traces differ:\n%s\n---\n%s", direct.Violation.Message, other.Violation.Message)
+	}
+	msg := direct.Violation.Message
+	if !strings.Contains(msg, "panicker.Timer") {
+		t.Errorf("panic report should include the node's frame:\n%s", msg)
+	}
+	if strings.Contains(msg, "testing.tRunner") || strings.Contains(msg, "runtime/debug") {
+		t.Errorf("panic report should not include frames outside the node:\n%s", msg)
+	}
+}

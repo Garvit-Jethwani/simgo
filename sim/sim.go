@@ -3,7 +3,9 @@ package sim
 import (
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -235,7 +237,7 @@ func (s *Simulator) invoke(ns *nodeState, idx int, fn func()) {
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				s.fail("node panic", fmt.Sprintf("node %s panicked: %v\n%s", ns.name, r, debug.Stack()))
+				s.fail("node panic", fmt.Sprintf("node %s panicked: %v\n%s", ns.name, r, stableStack(debug.Stack())))
 			}
 		}()
 		fn()
@@ -278,4 +280,41 @@ func (s *Simulator) fail(name, msg string) {
 	}
 	idx := s.record(TraceEvent{Kind: KindViolation, Node: -1, Peer: -1, Detail: name + ": " + msg})
 	s.violation = &Violation{Invariant: name, Message: msg, At: int64(s.now), Event: idx}
+}
+
+var (
+	hexAddr     = regexp.MustCompile(`0x[0-9a-f]+`)
+	goroutineID = regexp.MustCompile(`goroutine \d+`)
+)
+
+// stableStack keeps only the frames between the panic and the simulator (the
+// node's own code) and removes pointer values and goroutine IDs. Frames below
+// the simulator depend on who called Run, and pointers change from run to
+// run; neither may leak into the trace, or a deterministic run would look
+// nondeterministic.
+func stableStack(stack []byte) string {
+	lines := strings.Split(string(stack), "\n")
+	start, end := 0, len(lines)
+	for i, l := range lines {
+		if strings.HasPrefix(l, "panic(") {
+			start = i + 2 // skip the panic frame and its file line
+			break
+		}
+	}
+	for i := start; i < len(lines); i++ {
+		if strings.Contains(lines[i], "simgo/sim.(*Simulator).invoke") {
+			end = i
+			break
+		}
+	}
+	if start > end {
+		start = 0
+	}
+	// Drop the trailing closure frames that belong to invoke itself.
+	for end > start && strings.Contains(lines[end-2], "simgo/sim.(*Simulator).") {
+		end -= 2
+	}
+	s := strings.Join(lines[start:end], "\n")
+	s = hexAddr.ReplaceAllString(s, "0x?")
+	return goroutineID.ReplaceAllString(s, "goroutine ?")
 }
