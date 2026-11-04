@@ -215,37 +215,43 @@ sequenceDiagram
 
 ## Deployment
 
-### Today: local and CI
+### Local and CI
 
 SimGo is a library. It runs wherever `go test` runs: a laptop, or GitHub
 Actions (see `.github/workflows/ci.yml`). Failing traces are uploaded as CI
 artifacts.
 
-### Phase 5: hosted exploration on AWS
+### Hosted exploration on AWS (`cloud/`, `deploy/aws/`)
 
 Running a few hundred seeds per commit catches common bugs. Rare
-interleavings need millions. The hosted service fans seeds out across cheap
-Spot capacity and keeps the failures.
+interleavings need hundreds of thousands. The hosted service splits a job
+into seed shards and runs them on Fargate Spot workers that scale with the
+queue, from zero.
 
 ```mermaid
 flowchart LR
-    GH["GitHub<br/>(push / PR)"] -->|webhook| API["API<br/>(Lambda + API Gateway)"]
-    API -->|job: repo, test, seed range| SQS["SQS queue"]
-    SQS --> BATCH["AWS Batch on EC2 Spot<br/>workers run: go test with seed ranges"]
-    BATCH -->|failing traces| S3["S3<br/>trace.html per failure"]
-    BATCH -->|run summaries| DDB["DynamoDB<br/>runs, seeds, fingerprints"]
-    S3 --> CF["CloudFront<br/>hosted viewer"]
-    DDB --> API
-    API -->|PR comment with viewer link| GH
+    CLI["simgo-cloud submit / status"] -->|bearer token| API["API<br/>Lambda function URL"]
+    API --> DDB[("DynamoDB<br/>jobs, shards, failures")]
+    API -->|one message per shard| SQS["SQS (+ DLQ)"]
+    SQS --> W["Workers: ECS Fargate Spot, arm64<br/>git checkout + go test with SIMGO_* seed range"]
+    W -->|traces| S3[("S3, private")]
+    W --> DDB
+    CW["CloudWatch alarms on queue depth"] -->|scale 0..N| W
+    API -->|presigned trace links| S3
 ```
 
-- **Workers** are stateless containers: check out the commit, build the test
-  binary once, run it over a range of seeds. A failure is just a seed number
-  plus a trace, so a Spot interruption loses nothing important.
-- **De-duplication:** failures are grouped by the violated invariant and the
-  last few events, so one bug found by 300 seeds shows up once.
-- **Cost control:** seed budgets per repository, and the most recent commits
-  are explored first.
+- **Workers** are stateless: check out the commit once per job, run
+  `go test` over the shard's seeds, read the `SIMGO_REPORT` JSON records,
+  upload traces. An interrupted Spot task is harmless; SQS redelivers the
+  shard after its visibility timeout. Code that does not build is recorded
+  as a shard error, not retried.
+- **De-duplication:** failures are grouped by invariant and message with
+  numbers masked, so one bug found by 300 seeds shows up once.
+- **The core logic** (`cloud/hosted`) has no AWS dependency; storage and
+  queueing are interfaces with in-memory implementations, so the whole
+  pipeline also runs on one machine (`simgo-cloud local`).
+
+See [the deployment guide](deploy/aws.md) for setup, costs and operations.
 
 ## Determinism rules for node code
 
@@ -275,6 +281,9 @@ examples/    real bugs SimGo finds, with fixed versions
   httpkv/    primary/backup service on unmodified net/http (goroutine mode)
 x/simnet/    EXPERIMENTAL: simulated TCP network for goroutine code (Phase 4)
 x/simproc/   EXPERIMENTAL: goroutine mode: processes, crashes, invariants
+cloud/       hosted exploration (separate Go module): hosted/ core, awsstore/,
+             cmd/simgo-cloud CLI and worker, cmd/simgo-api-lambda
+deploy/aws/  Terraform for the hosted service
 docs/        architecture, ADRs, design documents, roadmap
 ```
 

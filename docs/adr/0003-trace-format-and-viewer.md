@@ -24,7 +24,8 @@ offline.
 
 - A failing CI run can upload `trace.html` as an artifact; anyone can open it
   without installing anything.
-- The same file can be hosted unchanged on S3 and CloudFront in Phase 5.
+- The same file can be hosted unchanged. (Phase 5 stores traces in a private
+  S3 bucket and serves them through short-lived presigned links.)
 - Very long traces (hundreds of thousands of events) will need windowing in
   the viewer. Simulations that fail usually fail early, so this is deferred.
 - The trace is also the determinism check: its SHA-256 is the run's

@@ -40,10 +40,15 @@ task lands as its own commit.
 - [x] Reproduction report: re-run failing seeds and report the rate
 - [x] Showcase: a primary/backup service on unmodified `net/http` (async replication bug found, fix verified)
 
-## Phase 5: Hosted exploration on AWS
-- [ ] Run millions of seeds on Spot capacity (AWS Batch)
-- [ ] Store failing traces in S3, browse them in a hosted viewer
-- [ ] GitHub App: comment on PRs with new failures and a viewer link
+## Phase 5: Hosted exploration on AWS ([deployment guide](deploy/aws.md))
+- [x] Machine-readable results: `SIMGO_REPORT` JSON records, `SIMGO_FIRST_SEED` for sharding
+- [x] Hosted core (`cloud/hosted`): job validation, sharding, worker, failure grouping, HTTP API
+- [x] AWS storage (`cloud/awsstore`): SQS queue with DLQ, private S3 traces with presigned links, single-table DynamoDB with TTL
+- [x] `simgo-cloud` CLI (local, worker, api, submit, status) and the API Lambda
+- [x] Terraform (`deploy/aws`): Fargate Spot workers scaling 0..N on queue depth, Lambda function URL, least-privilege IAM
+- [x] Worker image (arm64) and CI jobs for the cloud module, Terraform validation and the image build
+- [ ] GitHub App: comment on PRs with new failures and trace links
+- [ ] Private repositories without tokens in job records
 
 ## Phase 6: Launch
 - [ ] Demo video and GIF of the viewer
