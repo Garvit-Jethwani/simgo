@@ -3,6 +3,7 @@ package simnet
 import (
 	"hash/fnv"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"sync"
@@ -24,6 +25,7 @@ type pipe struct {
 	closed   bool // the reader closed its end
 	seq      int
 	lastAt   time.Time  // arrival time of the last segment, for FIFO order
+	rng      *rand.Rand // this direction's latency stream (guarded by mu)
 	held     []*segment // segments waiting for a partition to heal
 	deadline time.Time
 	timer    *time.Timer
@@ -36,7 +38,7 @@ type segment struct {
 }
 
 func newPipe(nw *Network, from, to *Host, id string) *pipe {
-	p := &pipe{nw: nw, from: from, to: to, id: id}
+	p := &pipe{nw: nw, from: from, to: to, id: id, rng: nw.stream(id + "|" + from.name)}
 	p.cond = sync.NewCond(&p.mu)
 	return p
 }
@@ -44,8 +46,8 @@ func newPipe(nw *Network, from, to *Host, id string) *pipe {
 // send schedules data (or a FIN) for delivery after a seeded latency,
 // preserving order on this direction.
 func (p *pipe) send(data []byte, fin bool) {
-	lat := p.from.latency()
 	p.mu.Lock()
+	lat := p.nw.latency(p.rng)
 	p.seq++
 	seg := &segment{data: data, fin: fin, seq: p.seq}
 	at := time.Now().Add(lat)
@@ -104,11 +106,11 @@ func (p *pipe) release() {
 	p.mu.Lock()
 	held := p.held
 	p.held = nil
+	lat := p.nw.latency(p.rng)
 	p.mu.Unlock()
 	if len(held) == 0 {
 		return
 	}
-	lat := p.from.latency()
 	time.AfterFunc(lat, func() {
 		if p.nw.isDown(p.to.name) {
 			for _, seg := range held {

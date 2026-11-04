@@ -243,9 +243,6 @@ func (n *Network) Host(name string) *Host {
 	h, ok := n.hosts[name]
 	if !ok {
 		h = &Host{nw: n, name: name, crashed: make(chan struct{})}
-		// Each host gets its own random stream, so the order in which
-		// different hosts act does not change the latencies they see.
-		h.rng = rand.New(rand.NewPCG(n.cfg.Seed, hashString(name)))
 		n.hosts[name] = h
 	}
 	return h
@@ -263,7 +260,6 @@ func hashString(s string) uint64 {
 type Host struct {
 	nw      *Network
 	name    string
-	rng     *rand.Rand
 	dials   int
 	down    bool
 	crashed chan struct{} // closed when the host crashes; replaced on restart
@@ -274,17 +270,25 @@ type Host struct {
 // Name returns the host name.
 func (h *Host) Name() string { return h.name }
 
-func (h *Host) latency() time.Duration {
-	h.nw.mu.Lock()
-	defer h.nw.mu.Unlock()
-	lo, hi := h.nw.cfg.MinLatency, h.nw.cfg.MaxLatency
+// stream returns a random source for one connection direction (or one
+// dial), seeded from the run seed and that stream's identity. Latencies are
+// drawn per connection rather than per host so that two goroutines of the
+// same process sending on different connections at the same virtual instant
+// cannot change each other's latencies, whichever runs first.
+func (n *Network) stream(id string) *rand.Rand {
+	return rand.New(rand.NewPCG(n.cfg.Seed, hashString(id)))
+}
+
+// latency draws a one-way latency from rng.
+func (n *Network) latency(rng *rand.Rand) time.Duration {
+	lo, hi := n.cfg.MinLatency, n.cfg.MaxLatency
 	d := lo
 	if hi > lo {
-		d += time.Duration(h.rng.Int64N(int64(hi - lo)))
+		d += time.Duration(rng.Int64N(int64(hi - lo)))
 	}
 	// A seeded sub-millisecond jitter makes simultaneous deliveries on
 	// different connections rare, so most reactions run one at a time.
-	return d + time.Duration(h.rng.Int64N(1000))
+	return d + time.Duration(rng.Int64N(1000))
 }
 
 // Listen opens a listener on the given port.
@@ -321,7 +325,7 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	h.nw.mu.Unlock()
 	errCrashed := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("simnet: host crashed during dial")}
 
-	rtt := 2 * h.latency()
+	rtt := 2 * h.nw.latency(h.nw.stream("dial|"+id))
 	if !h.nw.reachable(h.name, dst) {
 		h.nw.record(Event{Kind: "dial-timeout", From: h.name, To: dst, Conn: id})
 		select {
