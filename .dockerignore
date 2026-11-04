@@ -1,0 +1,6 @@
+.git
+simgo-traces
+simgo-cloud-out
+cloud/dist
+deploy
+**/.terraform

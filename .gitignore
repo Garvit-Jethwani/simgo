@@ -1,3 +1,15 @@
 # Traces written by local test runs
 /simgo-traces/
 *.trace.html
+
+# Terraform: local state and plugins. The lock file is generated per
+# platform with `terraform init` (see docs/deploy/aws.md).
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Build outputs
+/cloud/dist/
+/simgo-cloud-out/
