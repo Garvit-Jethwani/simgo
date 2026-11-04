@@ -99,47 +99,88 @@ func Search(t *testing.T, cfg Config, opt Options) []Report {
 // Explore runs seeds and fails the test for each violation. Every failing
 // seed is re-run to measure how reproducible it is, and its trace is written
 // for the time-travel viewer. SIMGO_SEED runs a single seed and always
-// writes its trace.
+// writes its trace. With SIMGO_REPORT set, a JSON record of the run is
+// appended to that file (see simtest.RunRecord).
 func Explore(t *testing.T, cfg Config, opt Options) []Report {
 	t.Helper()
-	opt = resolve(opt)
+	return explore(t, t, cfg, opt)
+}
 
-	if seed, ok := simtest.SeedFromEnv(t); ok {
+// explore runs bubbles on t and reports failures to tb (which tests can
+// replace with a recorder).
+func explore(t *testing.T, tb testing.TB, cfg Config, opt Options) []Report {
+	tb.Helper()
+	opt = resolve(opt)
+	pkg := simtest.PackageDir()
+
+	if seed, ok := simtest.SeedFromEnv(tb); ok {
+		rec := simtest.RunRecord{Test: tb.Name(), Package: pkg, FirstSeed: seed, Seeds: 1}
 		r := runOne(t, cfg, seed)
-		path, err := simtest.WriteTrace(t, r, opt.Options)
+		path, err := simtest.WriteTrace(tb, r, opt.Options)
 		if err != nil {
-			t.Logf("simproc: could not write trace: %v", err)
+			tb.Logf("simproc: could not write trace: %v", err)
 		}
 		if !r.Failed() {
-			t.Logf("simproc: seed %d passed (%d events)\n    trace: %s", seed, r.Steps, path)
+			tb.Logf("simproc: seed %d passed (%d events)\n    trace: %s", seed, r.Steps, path)
+			appendRecord(tb, rec)
 			return nil
 		}
 		rep := measure(t, cfg, r, opt.Replays)
 		rep.TracePath = path
-		t.Errorf("simproc: %v\n    trace: %s", rep, path)
+		rec.Failures = append(rec.Failures, rep.record())
+		appendRecord(tb, rec)
+		tb.Errorf("simproc: %v\n    trace: %s", rep, path)
 		return []Report{rep}
 	}
 
+	rec := simtest.RunRecord{Test: tb.Name(), Package: pkg, FirstSeed: opt.FirstSeed, Seeds: opt.Seeds}
 	failures := Search(t, cfg, opt)
 	if len(failures) == 0 {
-		t.Logf("simproc: %d seeds explored, no violations", opt.Seeds)
+		tb.Logf("simproc: %d seeds explored, no violations", opt.Seeds)
+		appendRecord(tb, rec)
 		return nil
 	}
-	t.Errorf("simproc: %d of %d seeds violated an invariant", len(failures), opt.Seeds)
+	tb.Errorf("simproc: %d of %d seeds violated an invariant", len(failures), opt.Seeds)
 	var reports []Report
 	for i, f := range failures {
-		if i == opt.MaxReported {
-			t.Errorf("simproc: ... and %d more failing seeds", len(failures)-i)
-			break
+		if i >= opt.MaxReported {
+			if i == opt.MaxReported {
+				tb.Errorf("simproc: ... and %d more failing seeds", len(failures)-i)
+			}
+			rec.Failures = append(rec.Failures, f.record())
+			continue
 		}
 		rep := measure(t, cfg, f.Result, opt.Replays)
-		path, err := simtest.WriteTrace(t, f.Result, opt.Options)
+		path, err := simtest.WriteTrace(tb, f.Result, opt.Options)
 		if err != nil {
 			path = fmt.Sprintf("(could not write trace: %v)", err)
 		}
 		rep.TracePath = path
-		t.Errorf("simproc: %v\n    trace:  %s\n    replay: %s", rep, path, simtest.ReplayCommand(t, f.Result.Seed))
+		tb.Errorf("simproc: %v\n    trace:  %s\n    replay: %s", rep, path, simtest.ReplayCommand(tb, f.Result.Seed))
+		rec.Failures = append(rec.Failures, rep.record())
 		reports = append(reports, rep)
 	}
+	appendRecord(tb, rec)
 	return reports
+}
+
+func (r Report) record() simtest.FailureRecord {
+	fr := simtest.FailureRecord{
+		Seed:        r.Result.Seed,
+		Invariant:   r.Result.Violation.Invariant,
+		Message:     r.Result.Violation.Message,
+		AtNs:        r.Result.Violation.At,
+		Fingerprint: r.Result.Fingerprint(),
+		Trace:       r.TracePath,
+	}
+	if r.Replays > 0 {
+		fr.Reproduction = &simtest.Reproduction{Replays: r.Replays, Exact: r.Exact, SameViolation: r.SameViolation}
+	}
+	return fr
+}
+
+func appendRecord(tb testing.TB, rec simtest.RunRecord) {
+	if err := simtest.AppendRecord(rec); err != nil {
+		tb.Logf("simproc: could not append to SIMGO_REPORT: %v", err)
+	}
 }

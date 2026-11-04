@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Garvit-Jethwani/simgo/sim"
+	"github.com/Garvit-Jethwani/simgo/simtest"
 )
 
 // counterServer keeps a counter on disk. Each "inc" line increments it,
@@ -317,5 +318,38 @@ func TestReproductionReport(t *testing.T) {
 	}
 	if !strings.Contains(rep.String(), "exactly, 3 of 3 replays") {
 		t.Fatalf("unexpected report: %s", rep)
+	}
+}
+
+type recorder struct {
+	testing.TB
+	errors []string
+}
+
+func (r *recorder) Helper() {}
+func (r *recorder) Errorf(format string, a ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, a...))
+}
+func (r *recorder) Logf(format string, a ...any) {}
+
+func TestExploreWritesReportRecords(t *testing.T) {
+	path := t.TempDir() + "/report.jsonl"
+	t.Setenv("SIMGO_REPORT", path)
+	cfg := counterConfig(1000, Faults{Interval: 2 * time.Second, Crashes: true, MaxDowntime: time.Second})
+	rec := &recorder{TB: t}
+	reports := explore(t, rec, cfg, Options{Options: simtest.Options{Seeds: 5, OutDir: t.TempDir()}, Replays: 2})
+	if len(reports) == 0 || len(rec.errors) == 0 {
+		t.Fatal("expected failures to be reported")
+	}
+	records, err := simtest.ReadRecords(path)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records: %v, %v", records, err)
+	}
+	f := records[0].Failures[0]
+	if f.Invariant != monotonic.Name || f.Trace == "" || f.Reproduction == nil || f.Reproduction.Replays != 2 {
+		t.Fatalf("bad failure record: %+v", f)
+	}
+	if !strings.Contains(rec.errors[1], "reproduced: exactly, 2 of 2 replays") {
+		t.Fatalf("report should state the reproduction rate:\n%s", rec.errors[1])
 	}
 }

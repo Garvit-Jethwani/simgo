@@ -124,3 +124,45 @@ func TestReplayCommandQuotesTestName(t *testing.T) {
 		}
 	})
 }
+
+func TestReportFileRecordsEveryExploration(t *testing.T) {
+	path := t.TempDir() + "/report.jsonl"
+	t.Setenv("SIMGO_REPORT", path)
+	t.Setenv("SIMGO_FIRST_SEED", "11")
+	out := t.TempDir()
+
+	rec := &recorder{TB: t}
+	failures := Explore(rec, flakyConfig(), Options{Seeds: 40, OutDir: out, MaxReported: 2})
+	cfg := flakyConfig()
+	cfg.Invariants = nil
+	Explore(&recorder{TB: t}, cfg, Options{Seeds: 5, OutDir: out}) // passes
+
+	records, err := ReadRecords(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	first := records[0]
+	if first.FirstSeed != 11 || first.Seeds != 40 || first.Package != "./simtest" {
+		t.Fatalf("unexpected record header: %+v", first)
+	}
+	if len(first.Failures) != len(failures) {
+		t.Fatalf("record has %d failures, Explore returned %d", len(first.Failures), len(failures))
+	}
+	for i, f := range first.Failures {
+		if f.Invariant != "counter stays below 22" || f.Fingerprint == "" {
+			t.Fatalf("bad failure record: %+v", f)
+		}
+		if i < 2 && (f.Trace == "" || f.Reproduction == nil || f.Reproduction.Exact != 1) {
+			t.Fatalf("reported failure %d should have a trace and an exact reproduction: %+v", i, f)
+		}
+		if i >= 2 && f.Trace != "" {
+			t.Fatalf("failure %d beyond MaxReported should not have a trace", i)
+		}
+	}
+	if len(records[1].Failures) != 0 {
+		t.Fatal("passing exploration should record no failures")
+	}
+}

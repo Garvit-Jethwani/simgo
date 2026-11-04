@@ -15,6 +15,9 @@
 //	SIMGO_SEEDS       override the number of seeds to explore
 //	SIMGO_FIRST_SEED  override the first seed (used to shard exploration)
 //	SIMGO_OUT         directory for trace files (default: $TMPDIR/simgo)
+//	SIMGO_MAX_REPORTED  override how many failing seeds get a trace and report
+//	SIMGO_REPORT      append a JSON record of every exploration to this file
+//	                  (one JSON object per line; see RunRecord)
 package simtest
 
 import (
@@ -65,6 +68,9 @@ func (o Options) withDefaults() Options {
 	if o.Parallel <= 0 {
 		o.Parallel = runtime.GOMAXPROCS(0)
 	}
+	if n, err := strconv.Atoi(os.Getenv("SIMGO_MAX_REPORTED")); err == nil && n > 0 {
+		o.MaxReported = n
+	}
 	if o.MaxReported <= 0 {
 		o.MaxReported = 3
 	}
@@ -91,26 +97,37 @@ func Explore(t testing.TB, cfg sim.Config, opt Options) []*sim.Result {
 	opt = opt.withDefaults()
 
 	if seed, ok := envSeed(t); ok {
-		r := Replay(t, cfg, seed, opt)
+		rec := RunRecord{Test: t.Name(), Package: packageDir(), FirstSeed: seed, Seeds: 1}
+		r, fr := replay(t, cfg, seed, opt)
+		if fr != nil {
+			rec.Failures = append(rec.Failures, *fr)
+		}
+		appendRecord(t, rec)
 		if r.Failed() {
 			return []*sim.Result{r}
 		}
 		return nil
 	}
 
+	rec := RunRecord{Test: t.Name(), Package: packageDir(), FirstSeed: opt.FirstSeed, Seeds: opt.Seeds}
 	failures := Search(cfg, opt)
 	if len(failures) == 0 {
 		t.Logf("simgo: %d seeds explored, no violations", opt.Seeds)
+		appendRecord(t, rec)
 		return nil
 	}
 	t.Errorf("simgo: %d of %d seeds violated an invariant", len(failures), opt.Seeds)
 	for i, r := range failures {
-		if i == opt.MaxReported {
-			t.Errorf("simgo: ... and %d more failing seeds", len(failures)-i)
-			break
+		if i >= opt.MaxReported {
+			if i == opt.MaxReported {
+				t.Errorf("simgo: ... and %d more failing seeds", len(failures)-i)
+			}
+			rec.Failures = append(rec.Failures, failureRecord(r, "", nil))
+			continue
 		}
-		report(t, cfg, r, opt)
+		rec.Failures = append(rec.Failures, report(t, cfg, r, opt))
 	}
+	appendRecord(t, rec)
 	return failures
 }
 
@@ -152,24 +169,30 @@ func Search(cfg sim.Config, opt Options) []*sim.Result {
 // it violates an invariant.
 func Replay(t testing.TB, cfg sim.Config, seed uint64, opt Options) *sim.Result {
 	t.Helper()
+	r, _ := replay(t, cfg, seed, opt)
+	return r
+}
+
+func replay(t testing.TB, cfg sim.Config, seed uint64, opt Options) (*sim.Result, *FailureRecord) {
+	t.Helper()
 	opt = opt.withDefaults()
 	cfg.Seed = seed
 	r := sim.Run(cfg)
 	if r.Failed() {
-		report(t, cfg, r, opt)
-		return r
+		fr := report(t, cfg, r, opt)
+		return r, &fr
 	}
 	path, err := WriteTrace(t, r, opt)
 	if err != nil {
 		t.Logf("simgo: could not write trace: %v", err)
 	}
 	t.Logf("simgo: seed %d passed (%d steps, %v simulated)\n    trace: %s", seed, r.Steps, r.End, path)
-	return r
+	return r, nil
 }
 
 // report fails the test with a description of r, checks that the failure is
-// reproducible, and writes its trace.
-func report(t testing.TB, cfg sim.Config, r *sim.Result, opt Options) {
+// reproducible, writes its trace, and returns a record of it.
+func report(t testing.TB, cfg sim.Config, r *sim.Result, opt Options) FailureRecord {
 	t.Helper()
 	path, err := WriteTrace(t, r, opt)
 	if err != nil {
@@ -185,6 +208,11 @@ func report(t testing.TB, cfg sim.Config, r *sim.Result, opt Options) {
 	}
 	t.Errorf("simgo: seed %d: %v\n    trace:  %s\n    replay: %s%s",
 		r.Seed, r.Violation, path, ReplayCommand(t, r.Seed), determinism)
+	exact := 0
+	if determinism == "" {
+		exact = 1
+	}
+	return failureRecord(r, path, &Reproduction{Replays: 1, Exact: exact, SameViolation: sameViolation(r, again)})
 }
 
 // WriteTrace writes r's trace as HTML and returns the file path.
