@@ -24,7 +24,9 @@ invariant breaks, the seed reproduces the exact same run, every time.
 
 - Testing arbitrary binaries or other languages (Antithesis's territory).
 - Proving correctness. SimGo searches for bugs; it does not prove their absence.
-- Unmodified goroutine-based code. That is Phase 4 (see the roadmap).
+- Unmodified goroutine-based code in the core. Phase 4 adds an experimental
+  goroutine mode on `testing/synctest`; see the
+  [Phase 4 design](design/phase4-goroutine-mode.md).
 
 ## Component overview
 
@@ -238,7 +240,8 @@ examples/    real bugs SimGo finds, with fixed versions
   wal/       write-ahead log with group commit (lost acknowledged writes)
   raft/      the real etcd raft library (separate Go module, so the core
              library stays dependency-free)
-docs/        architecture, ADRs, roadmap
+x/simnet/    EXPERIMENTAL: simulated TCP network for goroutine code (Phase 4)
+docs/        architecture, ADRs, design documents, roadmap
 ```
 
 ## Running third-party libraries
