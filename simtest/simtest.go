@@ -11,9 +11,10 @@
 //
 // Environment variables:
 //
-//	SIMGO_SEED   run only this seed (replay mode)
-//	SIMGO_SEEDS  override the number of seeds to explore
-//	SIMGO_OUT    directory for trace files (default: $TMPDIR/simgo)
+//	SIMGO_SEED        run only this seed (replay mode)
+//	SIMGO_SEEDS       override the number of seeds to explore
+//	SIMGO_FIRST_SEED  override the first seed (used to shard exploration)
+//	SIMGO_OUT         directory for trace files (default: $TMPDIR/simgo)
 package simtest
 
 import (
@@ -55,6 +56,9 @@ func (o Options) withDefaults() Options {
 	if o.Seeds <= 0 {
 		o.Seeds = 100
 	}
+	if n, err := strconv.ParseUint(os.Getenv("SIMGO_FIRST_SEED"), 10, 64); err == nil && n > 0 {
+		o.FirstSeed = n
+	}
 	if o.FirstSeed == 0 {
 		o.FirstSeed = 1
 	}
@@ -72,6 +76,13 @@ func (o Options) withDefaults() Options {
 	}
 	return o
 }
+
+// Resolve returns the options with defaults and environment overrides
+// applied, for runners built on top of this package.
+func (o Options) Resolve() Options { return o.withDefaults() }
+
+// SeedFromEnv returns the seed in SIMGO_SEED, if set.
+func SeedFromEnv(t testing.TB) (uint64, bool) { return envSeed(t) }
 
 // Explore runs cfg across many seeds and fails the test for every seed that
 // violates an invariant. cfg.Seed is ignored. It returns the failing results.
