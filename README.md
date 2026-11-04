@@ -21,24 +21,41 @@ technique to Go.
 
 > Status: early development. See the [roadmap](docs/ROADMAP.md).
 
-## Example: a payment runner that charges customers twice
+## What it has found so far
 
-[`examples/lease`](examples/lease) is a job runner like many real ones:
-workers elect a leader with a lease row in a database, and the leader charges
-pending payments one by one. The code looks correct and passes ordinary
-tests.
+Three examples, each with a buggy and a fixed version. The buggy ones look
+reasonable and pass ordinary tests.
 
-SimGo explored 200 seeds in about 0.2 seconds and found **two different
-bugs** that both charge a customer twice:
+| Example | Bug | SimGo result |
+|---------|-----|--------------|
+| [`examples/raft`](examples/raft): the real [etcd raft](https://github.com/etcd-io/raft) library | fsync batched on a 50ms timer instead of before sending (breaks raft's storage contract) | **Two leaders in the same term** (seed 404) and **different data committed at the same log index** (seed 1251), out of 3,000 seeds. In 376 more seeds raft's own corruption check fires. Correct storage passes 300 seeds. |
+| [`examples/lease`](examples/lease): lease-based payment runner | Leader keeps charging after its lease expired (pause, partition, clock skew); lost "done" acknowledgement | A customer charged twice in 175 of 200 seeds, from two different bugs. The fenced version passes 500 seeds. |
+| [`examples/wal`](examples/wal): key-value server with group commit | Write acknowledged before the fsync that covers it | Acknowledged writes lost on crash in 100 of 100 seeds. Acking after fsync passes 300 seeds with the same throughput. |
 
-| Bug | Seeds | What happens |
-|-----|-------|--------------|
-| Stale leader | 100 / 200 | A worker is paused (GC pause, VM stall), partitioned, or its clock drifts. Its lease expires, another worker takes over and charges the job, then the first worker wakes up and charges it again. |
-| Lost acknowledgement | 75 / 200 | A worker charges a job, but its "mark done" message is lost. The database hands out the same job again and it is charged twice. |
+### etcd raft, under SimGo
 
-The fixed version sends each charge to the database with its lease epoch (a
-fencing token), and the database records the charge and the "done" flag in
-one step. It passes 500 seeds under the same faults.
+etcd raft is a deterministic state machine (`Tick`, `Step`, `Ready`), so it
+runs unmodified inside SimGo. Two things came out of it:
+
+- **SimGo's determinism check caught raft's own randomness.** raft draws
+  election timeouts from `crypto/rand`, so the same seed gave different runs.
+  The example starts elections from a seeded SimGo timer through raft's
+  public `Campaign` API instead, and every seed then replays exactly.
+- **One "optimisation" breaks Raft's safety.** Batching fsyncs on a timer lets
+  a crash erase a vote the node already cast, or log entries it already
+  acknowledged. SimGo turns that into concrete, replayable runs:
+
+```
+seed 404: invariant "election safety: at most one leader per term" violated at 13.98s:
+    term 7 has two leaders: n3 and n2
+seed 1251: invariant "state machine safety: same entry applied at each index" violated at 17.50s:
+    index 6: n3 applied "n3-v1@14992ms" (term 5) but n1 applied "n1-v2@14014ms" (term 4)
+```
+
+The raft example is a separate Go module, so SimGo itself has no
+dependencies.
+
+### The double-charge example
 
 ```
 $ go test -v ./examples/lease

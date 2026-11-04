@@ -25,8 +25,8 @@ task lands as its own commit.
 
 ## Phase 3: Showcase examples
 - [x] Lease-based job runner: SimGo finds the double-charge bug, the fenced version passes
-- [ ] Find a seeded bug in a real Raft library (etcd raft)
-- [ ] Find the classic "missing fsync" bug in a write-ahead log
+- [x] Run the real etcd raft library: correct storage passes; batched fsync elects two leaders and loses committed data
+- [x] Find the classic "acknowledged before fsync" bug in a write-ahead log with group commit
 
 ## Phase 4: Real Go code mode
 - [ ] Run goroutine-based code inside Go 1.25 `testing/synctest` bubbles

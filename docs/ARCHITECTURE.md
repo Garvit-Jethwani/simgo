@@ -69,7 +69,10 @@ data races and no scheduler nondeterminism.
 
 After every event the simulator runs all invariants. The first failure stops
 the run and is recorded as a violation. A panic inside node code is also
-reported as a violation, with the panic message.
+reported as a violation, with the panic message and the node's own stack
+frames. Pointer values, goroutine IDs and frames below the simulator are
+stripped, because they differ between runs and would otherwise make a
+deterministic failure look nondeterministic.
 
 ### Nodes
 
@@ -231,5 +234,23 @@ sim/         simulator core: queue, network, disk, nemesis, trace
 simtest/     go test integration: Explore, replay, determinism check
 viewer/      self-contained HTML time-travel debugger
 examples/    real bugs SimGo finds, with fixed versions
+  lease/     lease-based payment runner (double charges)
+  wal/       write-ahead log with group commit (lost acknowledged writes)
+  raft/      the real etcd raft library (separate Go module, so the core
+             library stays dependency-free)
 docs/        architecture, ADRs, roadmap
 ```
+
+## Running third-party libraries
+
+Libraries that are already event-driven state machines run unmodified. The
+etcd raft example shows the two things to check:
+
+1. **Hidden randomness.** etcd raft draws election timeouts from
+   `crypto/rand`. SimGo's fingerprint check flags this immediately (two runs
+   of one seed diverge). The fix is to move the decision into the simulation:
+   raft's own election timer is effectively disabled and a seeded SimGo timer
+   calls the public `Campaign` API.
+2. **Storage contracts.** The library's durability requirements (here:
+   persist HardState and entries before sending) are implemented against
+   `sim.Disk`, so crashes can test them.
