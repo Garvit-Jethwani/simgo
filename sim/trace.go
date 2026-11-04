@@ -112,6 +112,9 @@ func encode(v any) (json.RawMessage, string) {
 	if typ.Kind() == reflect.Pointer {
 		name = typ.Elem().Name()
 	}
+	if n, ok := v.(Named); ok {
+		name = n.SimName()
+	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		b, _ = json.Marshal(fmt.Sprintf("%+v", v))

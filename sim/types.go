@@ -20,6 +20,13 @@ type NodeID int
 // JSON-serializable structs so they can be recorded in the trace.
 type Message any
 
+// Named is optionally implemented by messages and emitted values that want a
+// more descriptive name in traces than their Go type name (for example, a
+// wrapper type that carries several protocol message kinds).
+type Named interface {
+	SimName() string
+}
+
 // Node is the code under test. The simulator calls these methods one at a
 // time; a node never runs concurrently with itself or with other nodes.
 type Node interface {

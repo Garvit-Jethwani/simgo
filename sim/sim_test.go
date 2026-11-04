@@ -293,3 +293,26 @@ func BenchmarkChaosRun(b *testing.B) {
 		Run(chaosConfig(uint64(i)))
 	}
 }
+
+type namedMsg struct{ Kind string }
+
+func (m namedMsg) SimName() string { return m.Kind }
+
+type namer struct{}
+
+func (namer) Start(env *Env) {
+	if env.ID() == 0 {
+		env.Send(1, namedMsg{Kind: "MsgVote"})
+	}
+}
+func (namer) Receive(env *Env, from NodeID, m Message) {}
+func (namer) Timer(env *Env, name string)              {}
+
+func TestMessagesCanNameThemselves(t *testing.T) {
+	r := Run(Config{Nodes: 2, NewNode: func(NodeID) Node { return namer{} }, Duration: time.Second})
+	for _, e := range r.Trace.Events {
+		if e.Kind == KindSend && e.MsgType != "MsgVote" {
+			t.Fatalf("send recorded as %q, want MsgVote", e.MsgType)
+		}
+	}
+}
