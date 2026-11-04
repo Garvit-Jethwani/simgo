@@ -242,7 +242,7 @@ func (n *Network) Host(name string) *Host {
 	defer n.mu.Unlock()
 	h, ok := n.hosts[name]
 	if !ok {
-		h = &Host{nw: n, name: name}
+		h = &Host{nw: n, name: name, crashed: make(chan struct{})}
 		// Each host gets its own random stream, so the order in which
 		// different hosts act does not change the latencies they see.
 		h.rng = rand.New(rand.NewPCG(n.cfg.Seed, hashString(name)))
@@ -261,13 +261,14 @@ func hashString(s string) uint64 {
 
 // Host is one machine on the simulated network.
 type Host struct {
-	nw    *Network
-	name  string
-	rng   *rand.Rand
-	dials int
-	down  bool
-	conns []*conn
-	lns   []*listener
+	nw      *Network
+	name    string
+	rng     *rand.Rand
+	dials   int
+	down    bool
+	crashed chan struct{} // closed when the host crashes; replaced on restart
+	conns   []*conn
+	lns     []*listener
 }
 
 // Name returns the host name.
@@ -310,9 +311,15 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 		return nil, fmt.Errorf("simnet: dial %s: missing port", addr)
 	}
 	h.nw.mu.Lock()
+	if h.down {
+		h.nw.mu.Unlock()
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("simnet: host is down")}
+	}
 	h.dials++
 	id := fmt.Sprintf("%s#%d->%s", h.name, h.dials, addr)
+	crashed := h.crashed
 	h.nw.mu.Unlock()
+	errCrashed := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("simnet: host crashed during dial")}
 
 	rtt := 2 * h.latency()
 	if !h.nw.reachable(h.name, dst) {
@@ -321,6 +328,8 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 		case <-time.After(h.nw.cfg.DialTimeout):
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-crashed:
+			return nil, errCrashed
 		}
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("i/o timeout")}
 	}
@@ -328,6 +337,8 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	case <-time.After(rtt): // handshake
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-crashed:
+		return nil, errCrashed
 	}
 	// Look the listener up when the connection request arrives, not when the
 	// dial starts: that is what a real network does, and it means a server
@@ -346,6 +357,8 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	case ln.accept <- server:
 	case <-ln.done:
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	case <-crashed:
+		return nil, errCrashed
 	}
 	return client, nil
 }
@@ -355,6 +368,9 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 // accepts fail) and exit; simnet cannot stop goroutines by force.
 func (h *Host) Crash() {
 	h.nw.mu.Lock()
+	if !h.down {
+		close(h.crashed)
+	}
 	h.down = true
 	conns, lns := h.conns, h.lns
 	h.conns, h.lns = nil, nil
@@ -394,6 +410,9 @@ func (n *Network) Close() {
 // Restart brings a crashed host back up. It can listen and dial again.
 func (h *Host) Restart() {
 	h.nw.mu.Lock()
+	if h.down {
+		h.crashed = make(chan struct{})
+	}
 	h.down = false
 	h.nw.mu.Unlock()
 	h.nw.record(Event{Kind: "restart", From: h.name})
