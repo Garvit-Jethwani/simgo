@@ -100,7 +100,7 @@ func TestBlobsPutAndPresign(t *testing.T) {
 		t.Fatalf("object not stored: %v", fake.objects)
 	}
 	u, err := b.URL(context.Background(), "traces/j/seed-1.html")
-	if err != nil || u != "https://bkt.s3/simgo/traces/j/seed-1.html?sig" || gotTTL != 7*24*time.Hour {
+	if err != nil || u != "https://bkt.s3/simgo/traces/j/seed-1.html?sig" || gotTTL != 12*time.Hour {
 		t.Fatalf("url: %q ttl=%v err=%v", u, gotTTL, err)
 	}
 }

@@ -33,7 +33,8 @@ type Queue interface {
 // Blobs stores trace files.
 type Blobs interface {
 	Put(ctx context.Context, key string, body []byte, contentType string) error
-	// URL returns a link a person can open, valid for at least a few days.
+	// URL returns a link a person can open. It may be short-lived (hours);
+	// callers should ask for a fresh one rather than store it.
 	URL(ctx context.Context, key string) (string, error)
 }
 

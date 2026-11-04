@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,19 +240,36 @@ func (w *Worker) source(ctx context.Context, j Job) (string, error) {
 }
 
 // GitCheckout fetches ref from repo into dir. Remote repositories are
-// fetched shallowly; local ones (local mode) are cloned.
+// fetched shallowly over https; local ones (local mode) are fetched from
+// their path.
 func GitCheckout(ctx context.Context, repo, ref, dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	var env []string
+	if !strings.HasPrefix(repo, "https://") {
+		// Local mode: the repository may belong to another user (for
+		// example, mounted into the worker container), and git refuses
+		// those. Trust exactly that path, through a global config file:
+		// unlike -c flags, it also reaches the upload-pack subprocess that
+		// reads the source repository.
+		cfg := dir + ".gitconfig"
+		body := fmt.Sprintf("[safe]\n\tdirectory = %s\n\tdirectory = %s\n", repo, filepath.Join(repo, ".git"))
+		if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+			return err
+		}
+		defer os.Remove(cfg)
+		env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+cfg)
+	}
 	run := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git %v: %v\n%s", args, err, tail(out, 2000))
 		}
 		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
 	}
 	if err := run("init", "--quiet"); err != nil {
 		return err

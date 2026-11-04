@@ -92,12 +92,17 @@ type S3API interface {
 
 // Blobs is a hosted.Blobs on S3. Traces stay private; URL returns a
 // presigned link that expires.
+//
+// A presigned URL stops working when the credentials that signed it expire.
+// Lambda functions and ECS tasks sign with temporary role credentials that
+// last hours, so links are short-lived by design: the API signs fresh ones
+// on every status request.
 type Blobs struct {
 	Client  S3API
 	Presign func(ctx context.Context, bucket, key string, ttl time.Duration) (string, error)
 	Bucket  string
 	Prefix  string        // optional key prefix
-	TTL     time.Duration // presigned URL lifetime; default 7 days (the maximum)
+	TTL     time.Duration // presigned URL lifetime; default 12 hours
 }
 
 // NewBlobs builds Blobs from an S3 client.
@@ -131,7 +136,7 @@ func (b *Blobs) Put(ctx context.Context, key string, body []byte, contentType st
 func (b *Blobs) URL(ctx context.Context, key string) (string, error) {
 	ttl := b.TTL
 	if ttl == 0 {
-		ttl = 7 * 24 * time.Hour
+		ttl = 12 * time.Hour
 	}
 	return b.Presign(ctx, b.Bucket, b.key(key), ttl)
 }
