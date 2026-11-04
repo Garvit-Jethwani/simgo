@@ -118,7 +118,7 @@ func (s *Simulator) injectRandom(kind faultKind) bool {
 		ns.incarnation++
 		ns.pausedUntil = 0
 		ns.timers = nil
-		lost := ns.disk.crash()
+		lost := ns.disk.Crash()
 		ns.node = nil
 		s.record(TraceEvent{Kind: KindCrash, Node: ns.id, Peer: -1, Detail: fmt.Sprintf("lost %d unsynced disk writes", lost)})
 		s.schedule(&event{at: s.now + s.downtime(), kind: evFault, fault: &fault{kind: faultRestart, node: ns.id}})

@@ -15,7 +15,7 @@ func TestDiskUnsyncedWritesAreLostOnCrash(t *testing.T) {
 	if v, _ := d.Read("a"); string(v) != "2" {
 		t.Fatalf("read before crash = %q, want unsynced value %q", v, "2")
 	}
-	if lost := d.crash(); lost != 2 {
+	if lost := d.Crash(); lost != 2 {
 		t.Fatalf("crash lost %d writes, want 2", lost)
 	}
 	if v, _ := d.Read("a"); string(v) != "1" {
@@ -35,14 +35,14 @@ func TestDiskDeleteNeedsSync(t *testing.T) {
 	if _, ok := d.Read("k"); ok {
 		t.Fatal("deleted key still readable")
 	}
-	d.crash()
+	d.Crash()
 	if v, ok := d.Read("k"); !ok || string(v) != "v" {
 		t.Fatal("unsynced delete survived the crash")
 	}
 
 	d.Delete("k")
 	d.Sync()
-	d.crash()
+	d.Crash()
 	if _, ok := d.Read("k"); ok {
 		t.Fatal("synced delete was undone by a crash")
 	}
