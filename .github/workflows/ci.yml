@@ -32,6 +32,14 @@ jobs:
           SIMGO_OUT: ${{ runner.temp }}/simgo-traces
         run: go test -race -count=1 ./...
 
+      - name: Test etcd raft example (separate module)
+        working-directory: examples/raft
+        env:
+          SIMGO_OUT: ${{ runner.temp }}/simgo-traces
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
       - name: Upload failing traces
         if: failure()
         uses: actions/upload-artifact@v4
