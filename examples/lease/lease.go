@@ -228,7 +228,12 @@ var NoDoubleCharge = sim.Invariant{
 		for _, e := range w.Emitted(ChargedEvent) {
 			c := e.Value.(Charge)
 			if first, dup := seen[c.Job]; dup {
-				return fmt.Errorf("job %d charged twice: first by %s, again by %s", c.Job, first, c.By)
+				if first == c.By {
+					// The same worker charged again: its "done" was lost.
+					return fmt.Errorf("job %d charged twice by the same worker %s", c.Job, c.By)
+				}
+				// Two workers both believed they were the leader.
+				return fmt.Errorf("job %d charged by two workers: first %s, then %s", c.Job, first, c.By)
 			}
 			seen[c.Job] = c.By
 		}
