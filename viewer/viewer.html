@@ -259,7 +259,11 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
   // ---------- layout ----------
   let rowOf = new Int32Array(EV.length);
   let laneX = [];
-  let showTimers = true, showLogs = false;
+  // Timers are hidden by default when they dominate the trace (for example,
+  // raft ticks), so messages and faults stay readable.
+  const timerShare = EV.length ? EV.filter((e) => e.k === "timer").length / EV.length : 0;
+  let showTimers = timerShare < 0.3, showLogs = false;
+  $("show-timers").checked = showTimers;
   const visible = (e) => (e.k !== "timer" || showTimers) && (e.k !== "log" || showLogs);
 
   function layout() {
