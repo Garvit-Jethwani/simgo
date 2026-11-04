@@ -26,8 +26,9 @@ reproducibility over 30 runs per workload:
 
 Build goroutine mode on `testing/synctest` plus `x/simnet`:
 
-- per-host random streams and canonical log ordering, so concurrency
-  across hosts does not affect reproducibility;
+- per-connection random streams and canonical log ordering, so concurrency
+  across hosts, and across connections of one host, does not affect
+  reproducibility;
 - seeded jitter on every instant SimGo controls (deliveries, faults,
   restarts), so ties come only from user timers;
 - traces captured from the failing run itself, so debugging never depends

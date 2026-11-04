@@ -60,10 +60,13 @@ values:
 
 Two design choices exist only to make results reproducible:
 
-1. **Per-host random streams.** Latencies come from a stream seeded by
-   `(seed, host name)`, so the order in which hosts act cannot change the
-   latencies they get. Connection IDs come from per-host dial counters for
-   the same reason.
+1. **Per-connection random streams.** Each connection direction (and each
+   dial) draws latencies from its own stream, seeded by the run seed and the
+   connection's identity, so the order in which goroutines send on
+   *different* connections cannot change the latencies they get. Connection
+   IDs come from per-host dial counters. (The first version used one stream
+   per host; see "Results after implementation" for why that was not
+   enough.)
 2. **Canonical log order.** Events at the same virtual instant on different
    connections are independent; the fingerprint sorts them by
    `(time, connection, kind, sequence)` instead of recording order.
@@ -94,7 +97,7 @@ counts distinct network logs. One distinct log means reproducible.
 | Workload | What happens | Raw | Canonical |
 |----------|--------------|-----|-----------|
 | Sequential clients, distinct periods | Every goroutine wakes at its own instants | 1 | **1** |
-| Independent clients, same instants | Two **different hosts** wake at exactly the same instants and send | 2 | **1** |
+| Independent clients, same instants | Two **different hosts** wake at exactly the same instants and send | 2 to 4 | **1** |
 | Shared state, same instants | Two goroutines in **one process** wake together and race on a mutex-protected counter | 30 | **30** |
 | `select` with simultaneous cases | Two timers fire at the same instant | 30 | **30** |
 
@@ -112,8 +115,8 @@ process becoming runnable at the same virtual instant and then interacting**
 (shared memory, or a `select` with several ready cases).
 
 - Concurrency **across hosts** is not a problem. Hosts share no memory, and
-  per-host randomness plus canonical ordering make their interleaving
-  irrelevant.
+  per-connection randomness plus canonical ordering make their
+  interleaving irrelevant.
 - Concurrency **within a host at different instants** is not a problem.
   synctest only advances time when everything is blocked, so each instant's
   work finishes before the next instant begins.
@@ -187,15 +190,27 @@ the only SimGo-specific code is `Process.Listen` and `Process.DialContext`.
 
 | Check | Result |
 |-------|--------|
-| Async replication (acknowledge before the backup has the write) | Acknowledged write missing after failover in 4 of 40 seeds |
+| Async replication (acknowledge before the backup has the write) | Acknowledged write missing after failover in 5 of 40 seeds |
 | Sync replication (acknowledge after the backup confirmed) | 40 of 40 seeds pass under crashes and partitions |
 | Progress without faults | Every attempted write acknowledged and read back |
-| Reproducibility of the failing seeds | 12 of 12 replays byte-identical; 10 of 12 under the race detector |
+| Reproducibility of the failing seeds | 15 of 15 replays byte-identical, with and without the race detector, alone and with the whole test suite running in parallel |
 
-The race detector changes goroutine scheduling, which exposes a few
-same-instant races inside `net/http`'s own goroutines. That is the case this
-design anticipated, and why `Explore` reports a reproduction rate for every
-failing seed instead of assuming it.
+### Correction: the "net/http nondeterminism" was a simulator bug
+
+An earlier version of this document reported 12 of 12 exact replays, but
+only 10 of 12 under the race detector, and blamed same-instant races inside
+`net/http`'s own goroutines. Running the whole test suite under the race
+detector then produced 0 of 12. Diffing two diverging replays showed the
+real cause: at one virtual instant the primary sent an HTTP response to the
+client and, from a background goroutine, a replication request to the
+backup. Those are different connections, but latencies came from one random
+stream **per host**, so whichever goroutine ran first took the first
+number. Moving to one stream per connection direction fixed it: 15 of 15
+exact replays in every configuration, and the same failing seeds every
+time.
+
+The lesson matches the rest of this project: when a run does not reproduce,
+diff the traces before blaming the code under test.
 
 Two more simulator bugs were found while building the showcase, both caused
 by goroutines running at the same instant or outliving the run:

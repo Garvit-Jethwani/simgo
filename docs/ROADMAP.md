@@ -51,6 +51,16 @@ task lands as its own commit.
 - [ ] Private repositories without tokens in job records
 
 ## Phase 6: Launch
-- [ ] Demo video and GIF of the viewer
-- [ ] Blog post: "Finding a double-charge bug in 40 lines of Go"
-- [ ] Show HN
+- [x] Demo GIF and screenshots of the viewer
+- [x] Guide to writing SimGo tests, runnable godoc examples
+- [x] CONTRIBUTING, CHANGELOG, SECURITY
+- [x] Drafts: blog post, Show HN, LinkedIn post (`docs/launch/`)
+- [x] v0.1.0 release tag
+- [ ] Publish the blog post and Show HN
+
+## Next
+- [ ] Static analyzer for the determinism rules (goroutines, `time.Now`, global rand, map iteration in node code)
+- [ ] Shrinking: reduce a failing run to the fewest faults that still break the invariant
+- [ ] Viewer windowing for very long traces
+- [ ] Goroutine mode: disk errors and network-level pauses
+- [ ] Hosted: GitHub App with PR comments, private repositories without tokens in job records

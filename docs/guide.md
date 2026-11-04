@@ -177,7 +177,7 @@ func TestReplicationIsSafe(t *testing.T) {
 Every failing seed is re-run and its reproduction rate reported:
 
 ```
-seed 20: invariant "acknowledged writes are readable after failover" violated at 6.59s: key k24 was acknowledged but backup does not have it
+seed 20: invariant "acknowledged writes are readable after failover" violated at 6.54s: key k24 was acknowledged but backup does not have it
     reproduced: exactly, 5 of 5 replays
 ```
 

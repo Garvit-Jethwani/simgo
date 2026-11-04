@@ -31,7 +31,7 @@ and pass ordinary tests.
 | Example | The bug | What SimGo found |
 |---------|---------|------------------|
 | [`examples/raft`](examples/raft): the real [etcd raft](https://github.com/etcd-io/raft) library | fsync batched on a 50ms timer instead of before sending (breaks raft's storage contract) | **Two leaders in one term** and **different data committed at the same log index**, plus 376 runs where raft's own corruption check fired, in 3,000 seeds. Correct storage passes 300 seeds. |
-| [`examples/httpkv`](examples/httpkv): primary/backup service on **unmodified `net/http`** | Writes acknowledged before replication | Acknowledged writes missing after failover in 4 of 40 seeds; every failure replayed byte-identically (12 of 12). Synchronous replication passes. |
+| [`examples/httpkv`](examples/httpkv): primary/backup service on **unmodified `net/http`** | Writes acknowledged before replication | Acknowledged writes missing after failover in 5 of 40 seeds; every failure replayed byte-identically (15 of 15), including under the race detector. Synchronous replication passes. |
 | [`examples/lease`](examples/lease): lease-based payment runner | Leader keeps charging after losing its lease; lost "done" acknowledgement | Customers charged twice in 175 of 200 seeds, from **two distinct bugs** that hosted exploration reports separately. The fenced version passes 500 seeds. |
 | [`examples/wal`](examples/wal): key-value server with group commit | Write acknowledged before the fsync that covers it | Acknowledged writes lost on crash in 100 of 100 seeds. Acking after fsync passes 300 seeds with the same throughput. |
 
@@ -104,7 +104,7 @@ same virtual instant, so every failure reports its measured reproduction
 rate:
 
 ```
-simproc: seed 20: invariant "acknowledged writes are readable after failover" violated at 6.59s: key k24 was acknowledged but backup does not have it
+simproc: seed 20: invariant "acknowledged writes are readable after failover" violated at 6.54s: key k24 was acknowledged but backup does not have it
     reproduced: exactly, 5 of 5 replays
 ```
 
