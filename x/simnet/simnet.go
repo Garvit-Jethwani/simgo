@@ -91,6 +91,9 @@ type Event struct {
 	Seq  int    // per-connection-direction sequence number
 	Len  int
 	Sum  uint64 // FNV hash of the payload
+	// Data is a printable preview of the payload (at most 160 bytes). It is
+	// for display only and is not part of the fingerprint; Sum is.
+	Data string
 }
 
 func (e Event) String() string {
@@ -98,6 +101,36 @@ func (e Event) String() string {
 }
 
 func (n *Network) now() time.Duration { return time.Since(n.start) }
+
+// Now returns the virtual time since the network was created. Event times
+// use the same clock.
+func (n *Network) Now() time.Duration { return n.now() }
+
+// preview returns a printable prefix of a payload.
+func preview(b []byte) string {
+	const max = 160
+	cut := b
+	if len(cut) > max {
+		cut = cut[:max]
+	}
+	out := make([]rune, 0, len(cut))
+	for _, r := range string(cut) {
+		switch {
+		case r == '\n':
+			out = append(out, '⏎')
+		case r == '\r':
+		case r < 32 || r == 0xfffd:
+			out = append(out, '·')
+		default:
+			out = append(out, r)
+		}
+	}
+	s := string(out)
+	if len(b) > max {
+		s += "…"
+	}
+	return s
+}
 
 func (n *Network) record(e Event) {
 	e.At = n.now()
@@ -279,7 +312,6 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	h.nw.mu.Lock()
 	h.dials++
 	id := fmt.Sprintf("%s#%d->%s", h.name, h.dials, addr)
-	ln := h.nw.listeners[addr]
 	h.nw.mu.Unlock()
 
 	rtt := 2 * h.latency()
@@ -297,6 +329,13 @@ func (h *Host) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	// Look the listener up when the connection request arrives, not when the
+	// dial starts: that is what a real network does, and it means a server
+	// that starts listening at the same instant a client starts dialing is
+	// always found, whichever goroutine happened to run first.
+	h.nw.mu.Lock()
+	ln := h.nw.listeners[addr]
+	h.nw.mu.Unlock()
 	if ln == nil || ln.isClosed() {
 		h.nw.record(Event{Kind: "refuse", From: h.name, To: dst, Conn: id})
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}

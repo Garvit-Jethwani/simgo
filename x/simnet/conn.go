@@ -59,7 +59,7 @@ func (p *pipe) send(data []byte, fin bool) {
 	if fin {
 		kind = "fin"
 	}
-	p.nw.record(Event{Kind: kind, From: p.from.name, To: p.to.name, Conn: p.id, Seq: seg.seq, Len: len(data), Sum: sum(data)})
+	p.nw.record(Event{Kind: kind, From: p.from.name, To: p.to.name, Conn: p.id, Seq: seg.seq, Len: len(data), Sum: sum(data), Data: preview(data)})
 	time.AfterFunc(time.Until(at), func() { p.arrive(seg) })
 }
 
