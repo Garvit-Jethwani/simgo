@@ -55,7 +55,7 @@ task lands as its own commit.
 - [x] Guide to writing SimGo tests, runnable godoc examples
 - [x] CONTRIBUTING, CHANGELOG, SECURITY
 - [x] Drafts: blog post, Show HN, LinkedIn post (`docs/launch/`)
-- [x] v0.1.0 release tag
+- [ ] v0.1.0 release tags (`v0.1.0`, `cloud/v0.1.0`, `examples/raft/v0.1.0`) on commit `59afe53`
 - [ ] Publish the blog post and Show HN
 
 ## Next
